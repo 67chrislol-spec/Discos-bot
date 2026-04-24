@@ -1,7 +1,6 @@
-import os
+ import os
 import discord
 from discord.ext import commands
-from datetime import datetime, timezone, timedelta  # <-- ADDED
 
 intents = discord.Intents.default()
 intents.members = True
@@ -78,7 +77,6 @@ class VerifyView(discord.ui.View):
 
         await interaction.followup.send(embed=success_embed, ephemeral=True)
 
-
 def build_verify_embed(guild: discord.Guild) -> discord.Embed:
     embed = discord.Embed(
         title="Server Verification",
@@ -88,7 +86,6 @@ def build_verify_embed(guild: discord.Guild) -> discord.Embed:
     if guild.icon:
         embed.set_thumbnail(url=guild.icon.url)
     return embed
-
 
 async def ensure_verify_embed(guild: discord.Guild):
     verify_channel = discord.utils.find(
@@ -115,7 +112,6 @@ async def ensure_verify_embed(guild: discord.Guild):
     except discord.Forbidden:
         print(f"[ensure_verify_embed] FORBIDDEN in {guild.name}#{verify_channel.name}")
 
-
 @bot.event
 async def on_ready():
     bot.add_view(VerifyView())
@@ -127,110 +123,6 @@ async def on_ready():
         print(f"[on_ready] synced {len(synced)} slash commands")
     except Exception as e:
         print(f"[on_ready] failed to sync slash commands: {e}")
-
-
-# ================= CHECKUSER SYSTEM (ADDED) =================
-
-def account_risk_report(member: discord.Member):
-    now = datetime.now(timezone.utc)
-    account_age = now - member.created_at
-    server_age = now - member.joined_at if member.joined_at else timedelta(0)
-
-    flags = []
-
-    if account_age < timedelta(days=1):
-        flags.append("Account less than 24 hours old")
-    elif account_age < timedelta(days=7):
-        flags.append("Account less than 7 days old")
-
-    if member.avatar is None:
-        flags.append("Default avatar (never customized)")
-
-    if member.public_flags.value == 0 and account_age < timedelta(days=30):
-        flags.append("No badges + new account")
-
-    if server_age < timedelta(minutes=5) and account_age < timedelta(days=14):
-        flags.append("Joined very recently with new account")
-
-    if account_age < timedelta(days=3):
-        risk = "HIGH"
-    elif account_age < timedelta(days=30) and member.avatar is None:
-        risk = "MEDIUM"
-    elif flags:
-        risk = "LOW"
-    else:
-        risk = "NONE"
-
-    return account_age, server_age, flags, risk
-
-
-def fmt_age(delta: timedelta) -> str:
-    days = delta.days
-    if days >= 365:
-        return f"{days // 365}y {days % 365}d"
-    if days >= 1:
-        return f"{days}d"
-    hours = delta.seconds // 3600
-    if hours >= 1:
-        return f"{hours}h"
-    return f"{delta.seconds // 60}m"
-
-
-@bot.tree.command(name="checkuser", description="Check if a member looks fake or suspicious (admin only)")
-@discord.app_commands.describe(member="The member to check")
-async def checkuser(interaction: discord.Interaction, member: discord.Member):
-
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message(
-            "You need Administrator permission to use this command.",
-            ephemeral=True,
-        )
-        return
-
-    account_age, server_age, flags, risk = account_risk_report(member)
-
-    color = {
-        "HIGH": discord.Color.red(),
-        "MEDIUM": discord.Color.orange(),
-        "LOW": discord.Color.yellow(),
-        "NONE": discord.Color.green(),
-    }[risk]
-
-    embed = discord.Embed(
-        title=f"Account Check — {member.display_name}",
-        color=color,
-    )
-
-    embed.set_thumbnail(url=member.display_avatar.url)
-
-    embed.add_field(name="Username", value=str(member), inline=True)
-    embed.add_field(name="Risk", value=risk, inline=True)
-    embed.add_field(name="Account Age", value=fmt_age(account_age), inline=True)
-    embed.add_field(name="In Server", value=fmt_age(server_age), inline=True)
-
-    embed.add_field(
-        name="Flags",
-        value="\n".join(f"• {f}" for f in flags) if flags else "None",
-        inline=False,
-    )
-
-    embed.add_field(
-        name="Created",
-        value=f"<t:{int(member.created_at.timestamp())}:F>",
-        inline=False,
-    )
-
-    if member.joined_at:
-        embed.add_field(
-            name="Joined Server",
-            value=f"<t:{int(member.joined_at.timestamp())}:F>",
-            inline=False,
-        )
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-# ================= REST OF YOUR ORIGINAL CODE =================
 
 @bot.tree.command(name="verify", description="Manually verify a member (admin only)")
 @discord.app_commands.describe(member="The member to verify")
@@ -292,13 +184,145 @@ async def verify_cmd(interaction: discord.Interaction, member: discord.Member):
         except discord.Forbidden:
             pass
 
+    print(f"[verify_cmd] {interaction.user} manually verified {member}")
     await interaction.followup.send(f"✅ Verified {member.mention}.", ephemeral=True)
 
+@bot.tree.command(name="verifycount", description="Show how many members are verified vs unverified")
+async def verifycount(interaction: discord.Interaction):
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message("This command must be used in a server.", ephemeral=True)
+        return
 
-# ================= RUN =================
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message(
+            "You need Administrator permission to use this command.",
+            ephemeral=True,
+        )
+        return
+
+    member_role = discord.utils.find(
+        lambda r: r.name.strip().lower() == "apex | member",
+        guild.roles,
+    )
+    unverified_role = discord.utils.find(
+        lambda r: r.name.strip().lower() == "unverified",
+        guild.roles,
+    )
+
+    verified_count = len(member_role.members) if member_role else 0
+    unverified_count = len(unverified_role.members) if unverified_role else 0
+
+    embed = discord.Embed(
+        title="Verification Stats",
+        color=discord.Color.from_rgb(255, 90, 30),
+    )
+    embed.add_field(name="Verified", value=str(verified_count), inline=True)
+    embed.add_field(name="Unverified", value=str(unverified_count), inline=True)
+    embed.add_field(name="Total Members", value=str(guild.member_count), inline=True)
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.event
+async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
+    if payload.guild_id is None:
+        return
+    guild = bot.get_guild(payload.guild_id)
+    if guild is None:
+        return
+    channel = guild.get_channel(payload.channel_id)
+    if channel is None or "verify" not in channel.name.lower():
+        return
+
+    cached = payload.cached_message
+    if cached is not None:
+        if cached.author != bot.user:
+            return
+        if not cached.embeds or cached.embeds[0].title != "Server Verification":
+            return
+
+    print(f"[on_raw_message_delete] message in verify channel deleted, ensuring embed exists")
+    await ensure_verify_embed(guild)
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    print(f"[on_member_join] {member} joined {member.guild.name}")
+
+    unverified_role = discord.utils.find(
+        lambda r: r.name.strip().lower() == "unverified",
+        member.guild.roles,
+    )
+    if unverified_role:
+        try:
+            await member.add_roles(unverified_role)
+            print(f"[on_member_join] gave unverified role to {member}")
+        except discord.Forbidden:
+            print(f"[on_member_join] FORBIDDEN to add unverified role")
+
+    welcome_channel = discord.utils.find(
+        lambda c: "welcome" in c.name.lower(),
+        member.guild.text_channels,
+    )
+    print(f"[on_member_join] welcome_channel={welcome_channel}")
+
+    if welcome_channel:
+        count = member.guild.member_count
+        if 10 <= count % 100 <= 20:
+            suffix = "th"
+        else:
+            suffix = {1: "st", 2: "nd", 3: "rd"}.get(count % 10, "th")
+
+        embed = discord.Embed(
+            description=(
+                f"Welcome {member.display_name} to **APEX** "
+                f"you are the {count}{suffix} member!"
+            ),
+            color=discord.Color.from_rgb(255, 90, 30),
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+
+        content = (
+            f"Welcome {member.mention} to **APEX**!\n"
+            f"You are the {count}{suffix} member!"
+        )
+        try:
+            await welcome_channel.send(content=content, embed=embed)
+            print(f"[on_member_join] sent welcome message")
+        except discord.Forbidden:
+            print(f"[on_member_join] FORBIDDEN to send in welcome channel")
+    else:
+        text_channels = ", ".join(c.name for c in member.guild.text_channels)
+        print(f"[on_member_join] no welcome channel found. Available: {text_channels}")
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setup(ctx):
+    try:
+        await ctx.message.delete()
+    except discord.HTTPException:
+        pass
+
+    embed = discord.Embed(
+        title="Server Verification",
+        description="Click the button below to verify and gain access to the server.",
+        color=discord.Color.green(),
+    )
+    if ctx.guild and ctx.guild.icon:
+        embed.set_thumbnail(url=ctx.guild.icon.url)
+    await ctx.send(embed=embed, view=VerifyView())
+
+@setup.error
+async def setup_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
 
 token = os.environ.get("DISCORD_BOT_TOKEN")
 if not token:
     raise RuntimeError("DISCORD_BOT_TOKEN environment variable is not set")
 
-bot.run(token)
+bot.run(token) 
