@@ -1,7 +1,7 @@
 import os
 import discord
 from discord.ext import commands
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta  # <-- ADDED
 
 intents = discord.Intents.default()
 intents.members = True
@@ -9,7 +9,6 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ================= VERIFY BUTTON =================
 class VerifyView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -18,13 +17,18 @@ class VerifyView(discord.ui.View):
     async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
+        target = "apex | member"
         role = discord.utils.find(
-            lambda r: r.name.strip().lower() == "apex | member",
+            lambda r: r.name.strip().lower() == target,
             interaction.guild.roles,
         )
 
         if role is None:
-            await interaction.followup.send("Role `apex | member` not found.", ephemeral=True)
+            available = ", ".join(r.name for r in interaction.guild.roles if r.name != "@everyone")
+            await interaction.followup.send(
+                f"Role not found. Available roles: {available}",
+                ephemeral=True,
+            )
             return
 
         if role in interaction.user.roles:
@@ -33,22 +37,52 @@ class VerifyView(discord.ui.View):
 
         await interaction.user.add_roles(role)
 
-        # Remove unverified
-        unverified = discord.utils.find(
+        unverified_role = discord.utils.find(
             lambda r: r.name.strip().lower() == "unverified",
             interaction.guild.roles,
         )
-        if unverified and unverified in interaction.user.roles:
-            await interaction.user.remove_roles(unverified)
+        if unverified_role and unverified_role in interaction.user.roles:
+            await interaction.user.remove_roles(unverified_role)
 
-        await interaction.followup.send("✅ You are now verified!", ephemeral=True)
+        try:
+            await interaction.channel.set_permissions(
+                interaction.user,
+                view_channel=False,
+                send_messages=False,
+                read_message_history=False,
+                reason="Verified - removed from verify channel",
+            )
+            print(f"[verify] removed {interaction.user} from {interaction.channel}")
+        except discord.Forbidden:
+            print(f"[verify] FORBIDDEN to set channel perms for {interaction.user}")
+        except Exception as e:
+            print(f"[verify] error setting perms: {e}")
+
+        general_channel = discord.utils.find(
+            lambda c: "general" in c.name.lower(),
+            interaction.guild.text_channels,
+        )
+        general_mention = general_channel.mention if general_channel else "#general"
+
+        success_embed = discord.Embed(
+            title="You're Verified",
+            description=(
+                f"Welcome to **{interaction.guild.name}**. "
+                f"You now have full access to the server — head over to {general_mention} "
+                "to introduce yourself and join the conversation."
+            ),
+            color=discord.Color.green(),
+        )
+        if interaction.guild.icon:
+            success_embed.set_thumbnail(url=interaction.guild.icon.url)
+
+        await interaction.followup.send(embed=success_embed, ephemeral=True)
 
 
-# ================= VERIFY EMBED =================
-def build_verify_embed(guild):
+def build_verify_embed(guild: discord.Guild) -> discord.Embed:
     embed = discord.Embed(
         title="Server Verification",
-        description="Click the button below to verify and gain access.",
+        description="Click the button below to verify and gain access to the server.",
         color=discord.Color.green(),
     )
     if guild.icon:
@@ -56,50 +90,47 @@ def build_verify_embed(guild):
     return embed
 
 
-async def ensure_verify_embed(guild):
-    verify_channel = discord.utils.find(lambda c: "verify" in c.name.lower(), guild.text_channels)
-    if not verify_channel:
+async def ensure_verify_embed(guild: discord.Guild):
+    verify_channel = discord.utils.find(
+        lambda c: "verify" in c.name.lower(),
+        guild.text_channels,
+    )
+    if verify_channel is None:
         return
 
-    async for msg in verify_channel.history(limit=50):
-        if msg.author == bot.user and msg.embeds:
-            if msg.embeds[0].title == "Server Verification":
+    try:
+        async for msg in verify_channel.history(limit=50):
+            if (
+                msg.author == bot.user
+                and msg.embeds
+                and msg.embeds[0].title == "Server Verification"
+            ):
                 return
+    except discord.Forbidden:
+        return
 
-    await verify_channel.send(embed=build_verify_embed(guild), view=VerifyView())
+    try:
+        await verify_channel.send(embed=build_verify_embed(guild), view=VerifyView())
+        print(f"[ensure_verify_embed] posted in {guild.name}#{verify_channel.name}")
+    except discord.Forbidden:
+        print(f"[ensure_verify_embed] FORBIDDEN in {guild.name}#{verify_channel.name}")
 
 
-# ================= BOT READY =================
 @bot.event
 async def on_ready():
     bot.add_view(VerifyView())
     print(f"Logged in as {bot.user}")
-
     for guild in bot.guilds:
         await ensure_verify_embed(guild)
-
-    await bot.tree.sync()
-
-
-# ================= MEMBER JOIN =================
-@bot.event
-async def on_member_join(member):
-    unverified = discord.utils.find(
-        lambda r: r.name.strip().lower() == "unverified",
-        member.guild.roles,
-    )
-    if unverified:
-        await member.add_roles(unverified)
+    try:
+        synced = await bot.tree.sync()
+        print(f"[on_ready] synced {len(synced)} slash commands")
+    except Exception as e:
+        print(f"[on_ready] failed to sync slash commands: {e}")
 
 
-# ================= SETUP COMMAND =================
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def setup(ctx):
-    await ctx.send(embed=build_verify_embed(ctx.guild), view=VerifyView())
+# ================= CHECKUSER SYSTEM (ADDED) =================
 
-
-# ================= RISK SYSTEM =================
 def account_risk_report(member: discord.Member):
     now = datetime.now(timezone.utc)
     account_age = now - member.created_at
@@ -113,13 +144,13 @@ def account_risk_report(member: discord.Member):
         flags.append("Account less than 7 days old")
 
     if member.avatar is None:
-        flags.append("Default avatar")
+        flags.append("Default avatar (never customized)")
 
     if member.public_flags.value == 0 and account_age < timedelta(days=30):
         flags.append("No badges + new account")
 
     if server_age < timedelta(minutes=5) and account_age < timedelta(days=14):
-        flags.append("Joined very recently")
+        flags.append("Joined very recently with new account")
 
     if account_age < timedelta(days=3):
         risk = "HIGH"
@@ -133,10 +164,10 @@ def account_risk_report(member: discord.Member):
     return account_age, server_age, flags, risk
 
 
-def fmt_age(delta):
+def fmt_age(delta: timedelta) -> str:
     days = delta.days
     if days >= 365:
-        return f"{days // 365}y"
+        return f"{days // 365}y {days % 365}d"
     if days >= 1:
         return f"{days}d"
     hours = delta.seconds // 3600
@@ -145,12 +176,15 @@ def fmt_age(delta):
     return f"{delta.seconds // 60}m"
 
 
-# ================= /CHECKUSER =================
-@bot.tree.command(name="checkuser", description="Check if a user is suspicious")
+@bot.tree.command(name="checkuser", description="Check if a member looks fake or suspicious (admin only)")
+@discord.app_commands.describe(member="The member to check")
 async def checkuser(interaction: discord.Interaction, member: discord.Member):
 
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Admin only.", ephemeral=True)
+        await interaction.response.send_message(
+            "You need Administrator permission to use this command.",
+            ephemeral=True,
+        )
         return
 
     account_age, server_age, flags, risk = account_risk_report(member)
@@ -163,41 +197,108 @@ async def checkuser(interaction: discord.Interaction, member: discord.Member):
     }[risk]
 
     embed = discord.Embed(
-        title=f"User Check — {member}",
-        color=color
+        title=f"Account Check — {member.display_name}",
+        color=color,
     )
 
     embed.set_thumbnail(url=member.display_avatar.url)
 
+    embed.add_field(name="Username", value=str(member), inline=True)
     embed.add_field(name="Risk", value=risk, inline=True)
     embed.add_field(name="Account Age", value=fmt_age(account_age), inline=True)
-    embed.add_field(name="Server Time", value=fmt_age(server_age), inline=True)
+    embed.add_field(name="In Server", value=fmt_age(server_age), inline=True)
 
     embed.add_field(
         name="Flags",
         value="\n".join(f"• {f}" for f in flags) if flags else "None",
-        inline=False
+        inline=False,
     )
 
     embed.add_field(
         name="Created",
         value=f"<t:{int(member.created_at.timestamp())}:F>",
-        inline=False
+        inline=False,
     )
 
     if member.joined_at:
         embed.add_field(
-            name="Joined",
+            name="Joined Server",
             value=f"<t:{int(member.joined_at.timestamp())}:F>",
-            inline=False
+            inline=False,
         )
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+# ================= REST OF YOUR ORIGINAL CODE =================
+
+@bot.tree.command(name="verify", description="Manually verify a member (admin only)")
+@discord.app_commands.describe(member="The member to verify")
+async def verify_cmd(interaction: discord.Interaction, member: discord.Member):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message(
+            "You need Administrator permission to use this command.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    guild = interaction.guild
+    role = discord.utils.find(
+        lambda r: r.name.strip().lower() == "apex | member",
+        guild.roles,
+    )
+    if role is None:
+        await interaction.followup.send("Role `APEX | member` not found.", ephemeral=True)
+        return
+
+    if role in member.roles:
+        await interaction.followup.send(f"{member.mention} is already verified.", ephemeral=True)
+        return
+
+    try:
+        await member.add_roles(role, reason=f"Manually verified by {interaction.user}")
+    except discord.Forbidden:
+        await interaction.followup.send(
+            "I don't have permission to assign that role. Make sure my role is above `APEX | member`.",
+            ephemeral=True,
+        )
+        return
+
+    unverified_role = discord.utils.find(
+        lambda r: r.name.strip().lower() == "unverified",
+        guild.roles,
+    )
+    if unverified_role and unverified_role in member.roles:
+        try:
+            await member.remove_roles(unverified_role, reason=f"Manually verified by {interaction.user}")
+        except discord.Forbidden:
+            pass
+
+    verify_channel = discord.utils.find(
+        lambda c: "verify" in c.name.lower(),
+        guild.text_channels,
+    )
+    if verify_channel:
+        try:
+            await verify_channel.set_permissions(
+                member,
+                view_channel=False,
+                send_messages=False,
+                read_message_history=False,
+                reason=f"Manually verified by {interaction.user}",
+            )
+        except discord.Forbidden:
+            pass
+
+    await interaction.followup.send(f"✅ Verified {member.mention}.", ephemeral=True)
+
+
 # ================= RUN =================
+
 token = os.environ.get("DISCORD_BOT_TOKEN")
 if not token:
-    raise RuntimeError("DISCORD_BOT_TOKEN not set")
+    raise RuntimeError("DISCORD_BOT_TOKEN environment variable is not set")
 
 bot.run(token)
