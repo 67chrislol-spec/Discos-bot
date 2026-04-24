@@ -336,4 +336,54 @@ token = os.environ.get("DISCORD_BOT_TOKEN")
 if not token:
     raise RuntimeError("DISCORD_BOT_TOKEN environment variable is not set")
 
+from datetime import datetime, timedelta
+
+@bot.tree.command(name="scanmembers", description="Scan server for suspicious/fake accounts")
+async def scan_members(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message(
+            "You need Administrator permission to use this command.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    guild = interaction.guild
+    now = datetime.utcnow()
+
+    total_members = guild.member_count
+
+    new_accounts = 0
+    default_pfp = 0
+    suspicious = 0
+
+    for member in guild.members:
+        account_age = now - member.created_at
+
+        is_new = account_age < timedelta(days=7)
+        has_default_pfp = member.avatar is None
+
+        if is_new:
+            new_accounts += 1
+        if has_default_pfp:
+            default_pfp += 1
+
+        if is_new and has_default_pfp:
+            suspicious += 1
+
+    embed = discord.Embed(
+        title="Member Scan Results",
+        color=discord.Color.orange()
+    )
+
+    embed.add_field(name="Total Members", value=str(total_members), inline=False)
+    embed.add_field(name="New Accounts (<7 days)", value=str(new_accounts), inline=True)
+    embed.add_field(name="Default Avatars", value=str(default_pfp), inline=True)
+    embed.add_field(name="⚠️ Likely Suspicious", value=str(suspicious), inline=False)
+
+    embed.set_footer(text="This is an estimate, not 100% accurate.")
+
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
 bot.run(token)
