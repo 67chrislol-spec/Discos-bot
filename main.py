@@ -1,4 +1,4 @@
- import os
+import os
 import discord
 from discord.ext import commands
 
@@ -7,6 +7,7 @@ intents.members = True
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
 
 class VerifyView(discord.ui.View):
     def __init__(self):
@@ -77,6 +78,7 @@ class VerifyView(discord.ui.View):
 
         await interaction.followup.send(embed=success_embed, ephemeral=True)
 
+
 def build_verify_embed(guild: discord.Guild) -> discord.Embed:
     embed = discord.Embed(
         title="Server Verification",
@@ -86,6 +88,7 @@ def build_verify_embed(guild: discord.Guild) -> discord.Embed:
     if guild.icon:
         embed.set_thumbnail(url=guild.icon.url)
     return embed
+
 
 async def ensure_verify_embed(guild: discord.Guild):
     verify_channel = discord.utils.find(
@@ -112,6 +115,7 @@ async def ensure_verify_embed(guild: discord.Guild):
     except discord.Forbidden:
         print(f"[ensure_verify_embed] FORBIDDEN in {guild.name}#{verify_channel.name}")
 
+
 @bot.event
 async def on_ready():
     bot.add_view(VerifyView())
@@ -123,6 +127,7 @@ async def on_ready():
         print(f"[on_ready] synced {len(synced)} slash commands")
     except Exception as e:
         print(f"[on_ready] failed to sync slash commands: {e}")
+
 
 @bot.tree.command(name="verify", description="Manually verify a member (admin only)")
 @discord.app_commands.describe(member="The member to verify")
@@ -187,6 +192,7 @@ async def verify_cmd(interaction: discord.Interaction, member: discord.Member):
     print(f"[verify_cmd] {interaction.user} manually verified {member}")
     await interaction.followup.send(f"✅ Verified {member.mention}.", ephemeral=True)
 
+
 @bot.tree.command(name="verifycount", description="Show how many members are verified vs unverified")
 async def verifycount(interaction: discord.Interaction):
     guild = interaction.guild
@@ -225,6 +231,7 @@ async def verifycount(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+
 @bot.event
 async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
     if payload.guild_id is None:
@@ -245,6 +252,7 @@ async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
 
     print(f"[on_raw_message_delete] message in verify channel deleted, ensuring embed exists")
     await ensure_verify_embed(guild)
+
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -296,6 +304,7 @@ async def on_member_join(member: discord.Member):
         text_channels = ", ".join(c.name for c in member.guild.text_channels)
         print(f"[on_member_join] no welcome channel found. Available: {text_channels}")
 
+
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setup(ctx):
@@ -313,6 +322,7 @@ async def setup(ctx):
         embed.set_thumbnail(url=ctx.guild.icon.url)
     await ctx.send(embed=embed, view=VerifyView())
 
+
 @setup.error
 async def setup_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
@@ -320,6 +330,7 @@ async def setup_error(ctx, error):
             await ctx.message.delete()
         except discord.HTTPException:
             pass
+
 
 token = os.environ.get("DISCORD_BOT_TOKEN")
 if not token:
