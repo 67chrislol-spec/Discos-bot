@@ -337,3 +337,37 @@ if not token:
     raise RuntimeError("DISCORD_BOT_TOKEN environment variable is not set")
 
 bot.run(token)
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setup(ctx):
+def generate_key():
+    parts = []
+    for _ in range(5):
+        part = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+        parts.append(part)
+    return "APEX-" + "-".join(parts)
+
+@bot.command()
+async def key(ctx, action=None):
+    if action != "gen":
+        await ctx.send("Use `!key gen` to generate a key.")
+        return
+
+    key = generate_key()
+    user = ctx.author.name
+    expires = datetime.utcnow() + timedelta(days=1)
+
+    embed = discord.Embed(
+        title="APEX License Key Generated",
+        color=discord.Color.dark_gray()
+    )
+
+    embed.add_field(name="Key", value=f"`{key}`", inline=False)
+    embed.add_field(name="Type", value="Daily", inline=True)
+    embed.add_field(name="User", value=user, inline=True)
+    embed.add_field(name="Expires", value=expires.strftime("%Y-%m-%d %H:%M:%S"), inline=False)
+
+    embed.set_footer(text="this is just a fake key gen lol get pranked 😭")
+
+    await ctx.send(embed=embed)
