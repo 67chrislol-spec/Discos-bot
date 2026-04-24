@@ -8,12 +8,15 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+
 class VerifyView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(label="Verify ✅", style=discord.ButtonStyle.green, custom_id="verify_button")
     async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
         target = "apex | member"
         role = discord.utils.find(
             lambda r: r.name.strip().lower() == target,
@@ -22,14 +25,14 @@ class VerifyView(discord.ui.View):
 
         if role is None:
             available = ", ".join(r.name for r in interaction.guild.roles if r.name != "@everyone")
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"Role not found. Available roles: {available}",
                 ephemeral=True,
             )
             return
 
         if role in interaction.user.roles:
-            await interaction.response.send_message("Already verified ✅", ephemeral=True)
+            await interaction.followup.send("Already verified ✅", ephemeral=True)
             return
 
         await interaction.user.add_roles(role)
@@ -55,26 +58,26 @@ class VerifyView(discord.ui.View):
         except Exception as e:
             print(f"[verify] error setting perms: {e}")
 
-        try:
-            dm_embed = discord.Embed(
-                title="Verification Successful",
-                description=(
-                    f"Thank you for verifying in **{interaction.guild.name}**. "
-                    "You now have full access to the server. We're glad to have you with us."
-                ),
-                color=discord.Color.green(),
-            )
-            if interaction.guild.icon:
-                dm_embed.set_thumbnail(url=interaction.guild.icon.url)
-            await interaction.user.send(embed=dm_embed)
-        except discord.Forbidden:
-            pass
+        general_channel = discord.utils.find(
+            lambda c: "general" in c.name.lower(),
+            interaction.guild.text_channels,
+        )
+        general_mention = general_channel.mention if general_channel else "#general"
 
-        await interaction.response.defer(ephemeral=True)
-        try:
-            await interaction.delete_original_response()
-        except discord.HTTPException:
-            pass
+        success_embed = discord.Embed(
+            title="You're Verified",
+            description=(
+                f"Welcome to **{interaction.guild.name}**. "
+                f"You now have full access to the server — head over to {general_mention} "
+                "to introduce yourself and join the conversation."
+            ),
+            color=discord.Color.green(),
+        )
+        if interaction.guild.icon:
+            success_embed.set_thumbnail(url=interaction.guild.icon.url)
+
+        await interaction.followup.send(embed=success_embed, ephemeral=True)
+
 
 def build_verify_embed(guild: discord.Guild) -> discord.Embed:
     embed = discord.Embed(
@@ -85,6 +88,7 @@ def build_verify_embed(guild: discord.Guild) -> discord.Embed:
     if guild.icon:
         embed.set_thumbnail(url=guild.icon.url)
     return embed
+
 
 async def ensure_verify_embed(guild: discord.Guild):
     verify_channel = discord.utils.find(
@@ -111,6 +115,7 @@ async def ensure_verify_embed(guild: discord.Guild):
     except discord.Forbidden:
         print(f"[ensure_verify_embed] FORBIDDEN in {guild.name}#{verify_channel.name}")
 
+
 @bot.event
 async def on_ready():
     bot.add_view(VerifyView())
@@ -123,11 +128,83 @@ async def on_ready():
     except Exception as e:
         print(f"[on_ready] failed to sync slash commands: {e}")
 
+
+@bot.tree.command(name="verify", description="Manually verify a member (admin only)")
+@discord.app_commands.describe(member="The member to verify")
+async def verify_cmd(interaction: discord.Interaction, member: discord.Member):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message(
+            "You need Administrator permission to use this command.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    guild = interaction.guild
+    role = discord.utils.find(
+        lambda r: r.name.strip().lower() == "apex | member",
+        guild.roles,
+    )
+    if role is None:
+        await interaction.followup.send("Role `APEX | member` not found.", ephemeral=True)
+        return
+
+    if role in member.roles:
+        await interaction.followup.send(f"{member.mention} is already verified.", ephemeral=True)
+        return
+
+    try:
+        await member.add_roles(role, reason=f"Manually verified by {interaction.user}")
+    except discord.Forbidden:
+        await interaction.followup.send(
+            "I don't have permission to assign that role. Make sure my role is above `APEX | member`.",
+            ephemeral=True,
+        )
+        return
+
+    unverified_role = discord.utils.find(
+        lambda r: r.name.strip().lower() == "unverified",
+        guild.roles,
+    )
+    if unverified_role and unverified_role in member.roles:
+        try:
+            await member.remove_roles(unverified_role, reason=f"Manually verified by {interaction.user}")
+        except discord.Forbidden:
+            pass
+
+    verify_channel = discord.utils.find(
+        lambda c: "verify" in c.name.lower(),
+        guild.text_channels,
+    )
+    if verify_channel:
+        try:
+            await verify_channel.set_permissions(
+                member,
+                view_channel=False,
+                send_messages=False,
+                read_message_history=False,
+                reason=f"Manually verified by {interaction.user}",
+            )
+        except discord.Forbidden:
+            pass
+
+    print(f"[verify_cmd] {interaction.user} manually verified {member}")
+    await interaction.followup.send(f"✅ Verified {member.mention}.", ephemeral=True)
+
+
 @bot.tree.command(name="verifycount", description="Show how many members are verified vs unverified")
 async def verifycount(interaction: discord.Interaction):
     guild = interaction.guild
     if guild is None:
         await interaction.response.send_message("This command must be used in a server.", ephemeral=True)
+        return
+
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message(
+            "You need Administrator permission to use this command.",
+            ephemeral=True,
+        )
         return
 
     member_role = discord.utils.find(
@@ -154,6 +231,7 @@ async def verifycount(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+
 @bot.event
 async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
     if payload.guild_id is None:
@@ -174,6 +252,7 @@ async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
 
     print(f"[on_raw_message_delete] message in verify channel deleted, ensuring embed exists")
     await ensure_verify_embed(guild)
+
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -225,6 +304,7 @@ async def on_member_join(member: discord.Member):
         text_channels = ", ".join(c.name for c in member.guild.text_channels)
         print(f"[on_member_join] no welcome channel found. Available: {text_channels}")
 
+
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setup(ctx):
@@ -242,6 +322,7 @@ async def setup(ctx):
         embed.set_thumbnail(url=ctx.guild.icon.url)
     await ctx.send(embed=embed, view=VerifyView())
 
+
 @setup.error
 async def setup_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
@@ -249,6 +330,7 @@ async def setup_error(ctx, error):
             await ctx.message.delete()
         except discord.HTTPException:
             pass
+
 
 token = os.environ.get("DISCORD_BOT_TOKEN")
 if not token:
