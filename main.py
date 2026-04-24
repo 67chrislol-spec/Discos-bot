@@ -1,4 +1,4 @@
-Do it for me import os
+import os
 import discord
 from discord.ext import commands
 
