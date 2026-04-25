@@ -13,8 +13,26 @@ class VerifyView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Verify ✅", style=discord.ButtonStyle.green, custom_id="verify_button")
-    async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # ✅ Instant verify button (same logic as before)
+        self.add_item(VerifyButton())
+
+        # 🌐 OAuth / website verify button
+        self.add_item(discord.ui.Button(
+            label="Verify with Website 🌐",
+            style=discord.ButtonStyle.link,
+            url="https://discord.com/oauth2/authorize?client_id=1496753618861424700&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A5000%2Fcallback&scope=identify+guilds.join"  # 👈 PUT YOUR LINK HERE
+        ))
+
+
+class VerifyButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="Verify ✅",
+            style=discord.ButtonStyle.green,
+            custom_id="verify_button"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         target = "apex | member"
@@ -24,7 +42,9 @@ class VerifyView(discord.ui.View):
         )
 
         if role is None:
-            available = ", ".join(r.name for r in interaction.guild.roles if r.name != "@everyone")
+            available = ", ".join(
+                r.name for r in interaction.guild.roles if r.name != "@everyone"
+            )
             await interaction.followup.send(
                 f"Role not found. Available roles: {available}",
                 ephemeral=True,
@@ -35,8 +55,10 @@ class VerifyView(discord.ui.View):
             await interaction.followup.send("Already verified ✅", ephemeral=True)
             return
 
+        # ✅ Give role
         await interaction.user.add_roles(role)
 
+        # ❌ Remove unverified
         unverified_role = discord.utils.find(
             lambda r: r.name.strip().lower() == "unverified",
             interaction.guild.roles,
@@ -44,6 +66,7 @@ class VerifyView(discord.ui.View):
         if unverified_role and unverified_role in interaction.user.roles:
             await interaction.user.remove_roles(unverified_role)
 
+        # 🔒 Remove access to verify channel
         try:
             await interaction.channel.set_permissions(
                 interaction.user,
@@ -52,31 +75,28 @@ class VerifyView(discord.ui.View):
                 read_message_history=False,
                 reason="Verified - removed from verify channel",
             )
-            print(f"[verify] removed {interaction.user} from {interaction.channel}")
         except discord.Forbidden:
-            print(f"[verify] FORBIDDEN to set channel perms for {interaction.user}")
-        except Exception as e:
-            print(f"[verify] error setting perms: {e}")
+            pass
 
+        # 📢 Success embed
         general_channel = discord.utils.find(
             lambda c: "general" in c.name.lower(),
             interaction.guild.text_channels,
         )
         general_mention = general_channel.mention if general_channel else "#general"
 
-        success_embed = discord.Embed(
+        embed = discord.Embed(
             title="You're Verified",
             description=(
                 f"Welcome to **{interaction.guild.name}**. "
-                f"You now have full access to the server — head over to {general_mention} "
-                "to introduce yourself and join the conversation."
+                f"Head over to {general_mention} and start chatting!"
             ),
             color=discord.Color.green(),
         )
         if interaction.guild.icon:
-            success_embed.set_thumbnail(url=interaction.guild.icon.url)
+            embed.set_thumbnail(url=interaction.guild.icon.url)
 
-        await interaction.followup.send(embed=success_embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 def build_verify_embed(guild: discord.Guild) -> discord.Embed:
