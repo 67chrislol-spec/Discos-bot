@@ -1,22 +1,6 @@
 import os
-import secrets
-import asyncio
-import threading
 import discord
 from discord.ext import commands
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-
-# ── Flask app ──────────────────────────────────────────────────────────────────
-
-flask_app = Flask(**name**)
-CORS(flask_app)  # allow your verify site to call this
-
-# token → discord user id + guild id
-
-pending_verifications: dict[str, dict] = {}
-
-# ── Discord bot ────────────────────────────────────────────────────────────────
 
 intents = discord.Intents.default()
 intents.members = True
@@ -24,99 +8,103 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix=”!”, intents=intents)
 
-VERIFY_SITE_URL = os.environ.get(“VERIFY_SITE_URL”, “http://localhost:3000”)  # your hosted site
+VERIFY_URL = “https://discord.com/oauth2/authorize?client_id=1496753618861424700&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A5000%2Fcallback&scope=identify+guilds.join”
 
-# ── Helper ─────────────────────────────────────────────────────────────────────
+# ── Build the verify embed + button ───────────────────────────────────────────
 
-async def grant_verified_role(guild: discord.Guild, member: discord.Member):
-target = “apex | member”
-role = discord.utils.find(lambda r: r.name.strip().lower() == target, guild.roles)
-if role is None:
-return False, “Role not found”
-if role in member.roles:
-return False, “already_verified”
-
-```
-await member.add_roles(role)
-
-unverified_role = discord.utils.find(
-    lambda r: r.name.strip().lower() == "unverified", guild.roles
+def build_verify_embed(guild: discord.Guild) -> discord.Embed:
+embed = discord.Embed(
+title=“Server Verification”,
+description=“Click the button below to verify and gain access to the server.”,
+color=discord.Color.green(),
 )
-if unverified_role and unverified_role in member.roles:
-    await member.remove_roles(unverified_role)
+if guild.icon:
+embed.set_thumbnail(url=guild.icon.url)
+return embed
 
+def build_verify_view() -> discord.ui.View:
+view = discord.ui.View(timeout=None)
+view.add_item(
+discord.ui.Button(
+label=“Verify”,
+url=VERIFY_URL,
+style=discord.ButtonStyle.link,
+)
+)
+return view
+
+# ── Post embed in verify channel if not already there ─────────────────────────
+
+async def ensure_verify_embed(guild: discord.Guild):
 verify_channel = discord.utils.find(
-    lambda c: "verify" in c.name.lower(), guild.text_channels
+lambda c: “verify” in c.name.lower(), guild.text_channels
 )
-if verify_channel:
-    try:
-        await verify_channel.set_permissions(
-            member,
-            view_channel=False,
-            send_messages=False,
-            read_message_history=False,
-            reason="Web-verified",
-        )
-    except discord.Forbidden:
-        pass
-
-print(f"[web-verify] granted role to {member}")
-return True, "ok"
-```
-
-# ── Flask endpoint called by the verify website ────────────────────────────────
-
-@flask_app.route(”/verify”, methods=[“POST”])
-def verify_endpoint():
-data = request.get_json(force=True)
-token = data.get(“token”, “”).strip()
+if verify_channel is None:
+return
 
 ```
-if not token or token not in pending_verifications:
-    return jsonify({"success": False, "error": "Invalid or expired token"}), 400
-
-info = pending_verifications.pop(token)
-guild_id = info["guild_id"]
-user_id = info["user_id"]
-
-guild = bot.get_guild(guild_id)
-if guild is None:
-    return jsonify({"success": False, "error": "Guild not found"}), 500
-
-member = guild.get_member(user_id)
-if member is None:
-    return jsonify({"success": False, "error": "Member not found in guild"}), 400
-
-# Run the async grant in the bot's event loop
-future = asyncio.run_coroutine_threadsafe(
-    grant_verified_role(guild, member), bot.loop
-)
 try:
-    success, msg = future.result(timeout=10)
-except Exception as e:
-    return jsonify({"success": False, "error": str(e)}), 500
+    async for msg in verify_channel.history(limit=50):
+        if (
+            msg.author == bot.user
+            and msg.embeds
+            and msg.embeds[0].title == "Server Verification"
+        ):
+            return  # already posted
+except discord.Forbidden:
+    return
 
-if msg == "already_verified":
-    return jsonify({"success": True, "message": "Already verified!"})
-
-if not success:
-    return jsonify({"success": False, "error": msg}), 500
-
-return jsonify({"success": True, "message": f"Welcome to {guild.name}!"})
+try:
+    await verify_channel.send(embed=build_verify_embed(guild), view=build_verify_view())
+    print(f"[ensure_verify_embed] posted in #{verify_channel.name}")
+except discord.Forbidden:
+    print(f"[ensure_verify_embed] FORBIDDEN in #{verify_channel.name}")
 ```
 
-@flask_app.route(”/health”, methods=[“GET”])
-def health():
-return jsonify({“status”: “ok”})
+# ── on_ready ───────────────────────────────────────────────────────────────────
 
-# ── Send DM with verify link when member joins ─────────────────────────────────
+@bot.event
+async def on_ready():
+print(f”Logged in as {bot.user}”)
+for guild in bot.guilds:
+await ensure_verify_embed(guild)
+try:
+synced = await bot.tree.sync()
+print(f”[on_ready] synced {len(synced)} slash commands”)
+except Exception as e:
+print(f”[on_ready] failed to sync: {e}”)
+
+# ── Repost embed if it gets deleted ───────────────────────────────────────────
+
+@bot.event
+async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
+if payload.guild_id is None:
+return
+guild = bot.get_guild(payload.guild_id)
+if guild is None:
+return
+channel = guild.get_channel(payload.channel_id)
+if channel is None or “verify” not in channel.name.lower():
+return
+
+```
+cached = payload.cached_message
+if cached is not None:
+    if cached.author != bot.user:
+        return
+    if not cached.embeds or cached.embeds[0].title != "Server Verification":
+        return
+
+await ensure_verify_embed(guild)
+```
+
+# ── Give unverified role on join + welcome message ────────────────────────────
 
 @bot.event
 async def on_member_join(member: discord.Member):
 print(f”[on_member_join] {member} joined {member.guild.name}”)
 
 ```
-# Assign unverified role
 unverified_role = discord.utils.find(
     lambda r: r.name.strip().lower() == "unverified", member.guild.roles
 )
@@ -126,58 +114,17 @@ if unverified_role:
     except discord.Forbidden:
         print(f"[on_member_join] FORBIDDEN to add unverified role")
 
-# Generate a single-use token and send DM
-token = secrets.token_urlsafe(32)
-pending_verifications[token] = {
-    "guild_id": member.guild.id,
-    "user_id": member.id,
-}
-verify_url = f"{VERIFY_SITE_URL}?token={token}"
-
-try:
-    dm_embed = discord.Embed(
-        title=f"Verify your membership in {member.guild.name}",
-        description=(
-            f"Click the button below to complete verification and unlock the server.\n\n"
-            f"[**Verify Now →**]({verify_url})\n\n"
-            "_This link is single-use and tied to your account._"
-        ),
-        color=discord.Color.from_rgb(255, 90, 30),
-    )
-    if member.guild.icon:
-        dm_embed.set_thumbnail(url=member.guild.icon.url)
-    await member.send(embed=dm_embed)
-    print(f"[on_member_join] sent verify DM to {member}")
-except discord.Forbidden:
-    print(f"[on_member_join] cannot DM {member} — falling back to verify channel mention")
-    verify_channel = discord.utils.find(
-        lambda c: "verify" in c.name.lower(), member.guild.text_channels
-    )
-    if verify_channel:
-        try:
-            await verify_channel.send(
-                f"{member.mention} — please verify: {verify_url}",
-                delete_after=300,
-            )
-        except discord.Forbidden:
-            pass
-
-# Welcome message
 welcome_channel = discord.utils.find(
     lambda c: "welcome" in c.name.lower(), member.guild.text_channels
 )
 if welcome_channel:
     count = member.guild.member_count
     suffix = (
-        "th"
-        if 10 <= count % 100 <= 20
+        "th" if 10 <= count % 100 <= 20
         else {1: "st", 2: "nd", 3: "rd"}.get(count % 10, "th")
     )
     embed = discord.Embed(
-        description=(
-            f"Welcome {member.display_name} to **APEX** — "
-            f"you are the {count}{suffix} member!"
-        ),
+        description=f"Welcome {member.display_name} to **APEX** — you are the {count}{suffix} member!",
         color=discord.Color.from_rgb(255, 90, 30),
     )
     embed.set_thumbnail(url=member.display_avatar.url)
@@ -190,7 +137,26 @@ if welcome_channel:
         pass
 ```
 
-# ── /verify slash command (admin manual verify — unchanged) ────────────────────
+# ── !setup — (re)post the verify embed manually ───────────────────────────────
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setup(ctx):
+try:
+await ctx.message.delete()
+except discord.HTTPException:
+pass
+await ctx.send(embed=build_verify_embed(ctx.guild), view=build_verify_view())
+
+@setup.error
+async def setup_error(ctx, error):
+if isinstance(error, commands.MissingPermissions):
+try:
+await ctx.message.delete()
+except discord.HTTPException:
+pass
+
+# ── /verify — manual admin verify ─────────────────────────────────────────────
 
 @bot.tree.command(name=“verify”, description=“Manually verify a member (admin only)”)
 @discord.app_commands.describe(member=“The member to verify”)
@@ -202,17 +168,32 @@ return
 ```
 await interaction.response.defer(ephemeral=True, thinking=True)
 guild = interaction.guild
-success, msg = await grant_verified_role(guild, member)
 
-if msg == "already_verified":
+role = discord.utils.find(lambda r: r.name.strip().lower() == "apex | member", guild.roles)
+if role is None:
+    await interaction.followup.send("Role `apex | member` not found.", ephemeral=True)
+    return
+if role in member.roles:
     await interaction.followup.send(f"{member.mention} is already verified.", ephemeral=True)
-elif not success:
-    await interaction.followup.send(f"Error: {msg}", ephemeral=True)
-else:
-    await interaction.followup.send(f"✅ Verified {member.mention}.", ephemeral=True)
+    return
+
+try:
+    await member.add_roles(role, reason=f"Manually verified by {interaction.user}")
+except discord.Forbidden:
+    await interaction.followup.send("Missing permissions to assign that role.", ephemeral=True)
+    return
+
+unverified_role = discord.utils.find(lambda r: r.name.strip().lower() == "unverified", guild.roles)
+if unverified_role and unverified_role in member.roles:
+    try:
+        await member.remove_roles(unverified_role)
+    except discord.Forbidden:
+        pass
+
+await interaction.followup.send(f"✅ Verified {member.mention}.", ephemeral=True)
 ```
 
-# ── /verifycount (unchanged) ───────────────────────────────────────────────────
+# ── /verifycount ───────────────────────────────────────────────────────────────
 
 @bot.tree.command(name=“verifycount”, description=“Show verified vs unverified counts (admin only)”)
 async def verifycount(interaction: discord.Interaction):
@@ -234,32 +215,10 @@ if guild.icon:
 await interaction.response.send_message(embed=embed, ephemeral=True)
 ```
 
-# ── on_ready ───────────────────────────────────────────────────────────────────
+# ── Run ────────────────────────────────────────────────────────────────────────
 
-@bot.event
-async def on_ready():
-print(f”Logged in as {bot.user}”)
-try:
-synced = await bot.tree.sync()
-print(f”[on_ready] synced {len(synced)} slash commands”)
-except Exception as e:
-print(f”[on_ready] failed to sync: {e}”)
-
-# ── Start Flask in a background thread, then run the bot ──────────────────────
-
-def run_flask():
-port = int(os.environ.get(“PORT”, 8080))
-flask_app.run(host=“0.0.0.0”, port=port)
-
-if **name** == “**main**”:
 token = os.environ.get(“DISCORD_BOT_TOKEN”)
 if not token:
 raise RuntimeError(“DISCORD_BOT_TOKEN environment variable is not set”)
 
-```
-t = threading.Thread(target=run_flask, daemon=True)
-t.start()
-print("[startup] Flask running")
-
 bot.run(token)
-```
