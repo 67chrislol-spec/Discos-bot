@@ -1,4 +1,5 @@
 import os
+import re
 import random
 import asyncio
 from datetime import datetime, timezone, timedelta
@@ -15,6 +16,53 @@ VERIFY_URL = "https://discord.com/oauth2/authorize?client_id=1496753618861424700
 
 active_giveaways = {}
 ended_giveaways = {}
+
+
+def has_staff_access(user: discord.Member) -> bool:
+    if user.guild_permissions.administrator:
+        return True
+    return any(r.name.strip().lower() == "apex | staff" for r in user.roles)
+
+
+def parse_duration(duration_str: str) -> int | None:
+    """
+    Parse a duration string like '1d2h30m', '45m', '2h', '1d' into total seconds.
+    Supports: d (days), h (hours), m (minutes), s (seconds).
+    Returns total seconds, or None if the string is invalid.
+    """
+    pattern = re.compile(
+        r"(?:(\d+)\s*d(?:ays?)?)?"
+        r"\s*(?:(\d+)\s*h(?:ours?)?)?"
+        r"\s*(?:(\d+)\s*m(?:in(?:utes?)?)?)?"
+        r"\s*(?:(\d+)\s*s(?:ec(?:onds?)?)?)?",
+        re.IGNORECASE,
+    )
+    match = pattern.fullmatch(duration_str.strip())
+    if not match or not any(match.groups()):
+        return None
+
+    days = int(match.group(1) or 0)
+    hours = int(match.group(2) or 0)
+    minutes = int(match.group(3) or 0)
+    seconds = int(match.group(4) or 0)
+    total = days * 86400 + hours * 3600 + minutes * 60 + seconds
+    return total if total > 0 else None
+
+
+def format_duration(seconds: int) -> str:
+    parts = []
+    d, remainder = divmod(seconds, 86400)
+    h, remainder = divmod(remainder, 3600)
+    m, s = divmod(remainder, 60)
+    if d:
+        parts.append(f"{d}d")
+    if h:
+        parts.append(f"{h}h")
+    if m:
+        parts.append(f"{m}m")
+    if s:
+        parts.append(f"{s}s")
+    return " ".join(parts) if parts else "0s"
 
 
 def build_verify_embed(guild):
@@ -228,8 +276,13 @@ async def on_member_join(member):
 
 
 @bot.command()
-@commands.has_permissions(administrator=True)
 async def setup(ctx):
+    if not has_staff_access(ctx.author):
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
+        return
     try:
         await ctx.message.delete()
     except discord.HTTPException:
@@ -237,20 +290,11 @@ async def setup(ctx):
     await ctx.send(embed=build_verify_embed(ctx.guild), view=build_verify_view())
 
 
-@setup.error
-async def setup_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        try:
-            await ctx.message.delete()
-        except discord.HTTPException:
-            pass
-
-
-@bot.tree.command(name="verify", description="Manually verify a member (admin only)")
+@bot.tree.command(name="verify", description="Manually verify a member (staff only)")
 @discord.app_commands.describe(member="The member to verify")
-async def verify_cmd(interaction, member: discord.Member):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Administrator permission required.", ephemeral=True)
+async def verify_cmd(interaction: discord.Interaction, member: discord.Member):
+    if not has_staff_access(interaction.user):
+        await interaction.response.send_message("APEX | Staff permission required.", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True, thinking=True)
     guild = interaction.guild
@@ -275,10 +319,10 @@ async def verify_cmd(interaction, member: discord.Member):
     await interaction.followup.send(f"Verified {member.mention}.", ephemeral=True)
 
 
-@bot.tree.command(name="verifycount", description="Show verified vs unverified counts (admin only)")
-async def verifycount(interaction):
-    if not interaction.guild or not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Administrator permission required.", ephemeral=True)
+@bot.tree.command(name="verifycount", description="Show verified vs unverified counts (staff only)")
+async def verifycount(interaction: discord.Interaction):
+    if not interaction.guild or not has_staff_access(interaction.user):
+        await interaction.response.send_message("APEX | Staff permission required.", ephemeral=True)
         return
     guild = interaction.guild
     member_role = discord.utils.find(lambda r: r.name.strip().lower() == "apex | member", guild.roles)
@@ -292,21 +336,39 @@ async def verifycount(interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@bot.tree.command(name="gstart", description="Start a giveaway (admin only)")
+@bot.tree.command(name="gstart", description="Start a giveaway (staff only)")
 @discord.app_commands.describe(
     prize="What are you giving away?",
-    duration="Duration in minutes",
+    duration='Duration e.g. "1d", "2h30m", "45m", "1d12h"',
     winners="Number of winners (default: 1)",
     channel="Channel to post in (default: current channel)",
 )
-async def gstart(interaction: discord.Interaction, prize: str, duration: int, winners: int = 1, channel: discord.TextChannel = None):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Administrator permission required.", ephemeral=True)
+async def gstart(
+    interaction: discord.Interaction,
+    prize: str,
+    duration: str,
+    winners: int = 1,
+    channel: discord.TextChannel = None,
+):
+    if not has_staff_access(interaction.user):
+        await interaction.response.send_message("APEX | Staff permission required.", ephemeral=True)
         return
+
+    total_seconds = parse_duration(duration)
+    if total_seconds is None:
+        await interaction.response.send_message(
+            "Invalid duration format. Use combinations like `1d`, `2h`, `30m`, `1d12h`, `2h30m`, etc.",
+            ephemeral=True,
+        )
+        return
+
     target_channel = channel or interaction.channel
-    end_time = datetime.now(timezone.utc) + timedelta(minutes=duration)
+    end_time = datetime.now(timezone.utc) + timedelta(seconds=total_seconds)
     embed = build_giveaway_embed(prize, interaction.user, end_time, winners, 0)
-    await interaction.response.send_message(f"Giveaway started in {target_channel.mention}!", ephemeral=True)
+    await interaction.response.send_message(
+        f"Giveaway started in {target_channel.mention}! (ends in {format_duration(total_seconds)})",
+        ephemeral=True,
+    )
     msg = await target_channel.send(content="@everyone", embed=embed, view=GiveawayView())
     active_giveaways[msg.id] = {
         "channel_id": target_channel.id,
@@ -316,14 +378,14 @@ async def gstart(interaction: discord.Interaction, prize: str, duration: int, wi
         "end_time": end_time,
         "winners_count": winners,
         "entries": set(),
-        "task": asyncio.create_task(giveaway_timer(msg.id, duration * 60)),
+        "task": asyncio.create_task(giveaway_timer(msg.id, total_seconds)),
     }
 
 
-@bot.tree.command(name="gend", description="End the active giveaway in this channel early (admin only)")
+@bot.tree.command(name="gend", description="End the active giveaway in this channel early (staff only)")
 async def gend(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Administrator permission required.", ephemeral=True)
+    if not has_staff_access(interaction.user):
+        await interaction.response.send_message("APEX | Staff permission required.", ephemeral=True)
         return
 
     mid = None
@@ -343,10 +405,10 @@ async def gend(interaction: discord.Interaction):
     await end_giveaway(mid)
 
 
-@bot.tree.command(name="greroll", description="Reroll a winner from the last giveaway in this channel (admin only)")
+@bot.tree.command(name="greroll", description="Reroll a winner from the last giveaway in this channel (staff only)")
 async def greroll(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Administrator permission required.", ephemeral=True)
+    if not has_staff_access(interaction.user):
+        await interaction.response.send_message("APEX | Staff permission required.", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True, thinking=True)
 
