@@ -1,8 +1,6 @@
 import os
 import discord
-import random
-from datetime import datetime, timedelta
-from discord.ext import commands, tasks
+from discord.ext import commands
 
 intents = discord.Intents.default()
 intents.members = True
