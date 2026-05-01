@@ -177,11 +177,12 @@ async def on_ready():
     print("Logged in as " + str(bot.user))
     for guild in bot.guilds:
         await ensure_verify_embed(guild)
-    try:
-        synced = await bot.tree.sync()
-        print("[on_ready] synced " + str(len(synced)) + " slash commands")
-    except Exception as e:
-        print("[on_ready] failed to sync: " + str(e))
+        try:
+            bot.tree.copy_global_to(guild=guild)
+            synced = await bot.tree.sync(guild=guild)
+            print("[on_ready] synced " + str(len(synced)) + " commands to guild " + str(guild.id))
+        except Exception as e:
+            print("[on_ready] failed to sync guild " + str(guild.id) + ": " + str(e))
 
 
 @bot.event
@@ -295,16 +296,22 @@ async def verifycount(interaction):
 @bot.tree.command(name="gstart", description="Start a giveaway (admin only)")
 @discord.app_commands.describe(
     prize="What are you giving away?",
-    duration="Duration in minutes",
+    days="Duration in days (default: 0)",
+    hours="Duration in hours (default: 0)",
+    minutes="Duration in minutes (default: 0)",
     winners="Number of winners (default: 1)",
     channel="Channel to post in (default: current channel)",
 )
-async def gstart(interaction: discord.Interaction, prize: str, duration: int, winners: int = 1, channel: discord.TextChannel = None):
+async def gstart(interaction: discord.Interaction, prize: str, days: int = 0, hours: int = 0, minutes: int = 0, winners: int = 1, channel: discord.TextChannel = None):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("Administrator permission required.", ephemeral=True)
         return
+    total_minutes = days * 1440 + hours * 60 + minutes
+    if total_minutes <= 0:
+        await interaction.response.send_message("Please specify a duration using days, hours, and/or minutes.", ephemeral=True)
+        return
     target_channel = channel or interaction.channel
-    end_time = datetime.now(timezone.utc) + timedelta(minutes=duration)
+    end_time = datetime.now(timezone.utc) + timedelta(minutes=total_minutes)
     embed = build_giveaway_embed(prize, interaction.user, end_time, winners, 0)
     await interaction.response.send_message(f"Giveaway started in {target_channel.mention}!", ephemeral=True)
     msg = await target_channel.send(content="@everyone", embed=embed, view=GiveawayView())
@@ -316,7 +323,7 @@ async def gstart(interaction: discord.Interaction, prize: str, duration: int, wi
         "end_time": end_time,
         "winners_count": winners,
         "entries": set(),
-        "task": asyncio.create_task(giveaway_timer(msg.id, duration * 60)),
+        "task": asyncio.create_task(giveaway_timer(msg.id, total_minutes * 60)),
     }
 
 
