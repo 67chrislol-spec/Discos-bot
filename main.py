@@ -1,4 +1,5 @@
 import os
+import re
 import random
 import asyncio
 from datetime import datetime, timezone, timedelta
@@ -12,9 +13,16 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 VERIFY_URL = "https://discord.com/oauth2/authorize?client_id=1496753618861424700&response_type=code&redirect_uri=https%3A%2F%2Fapex-verify-d.up.railway.app%2Fcallback&scope=identify+guilds.join"
+STAFF_ROLE = "apex | staff"
 
 active_giveaways = {}
 ended_giveaways = {}
+
+
+def is_staff(interaction: discord.Interaction) -> bool:
+    if interaction.user.guild_permissions.administrator:
+        return True
+    return any(r.name.strip().lower() == STAFF_ROLE for r in interaction.user.roles)
 
 
 def build_verify_embed(guild):
@@ -172,6 +180,20 @@ async def giveaway_timer(message_id, delay):
     await end_giveaway(message_id)
 
 
+def parse_duration(duration_str: str) -> int:
+    total = 0
+    patterns = [
+        (r"(\d+)\s*d", 1440),
+        (r"(\d+)\s*h", 60),
+        (r"(\d+)\s*m", 1),
+    ]
+    for pattern, multiplier in patterns:
+        match = re.search(pattern, duration_str.lower())
+        if match:
+            total += int(match.group(1)) * multiplier
+    return total
+
+
 @bot.event
 async def on_ready():
     print("Logged in as " + str(bot.user))
@@ -247,11 +269,11 @@ async def setup_error(ctx, error):
             pass
 
 
-@bot.tree.command(name="verify", description="Manually verify a member (admin only)")
+@bot.tree.command(name="verify", description="Manually verify a member")
 @discord.app_commands.describe(member="The member to verify")
 async def verify_cmd(interaction, member: discord.Member):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Administrator permission required.", ephemeral=True)
+    if not is_staff(interaction):
+        await interaction.response.send_message("You need the APEX | STAFF role to use this command.", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True, thinking=True)
     guild = interaction.guild
@@ -276,10 +298,10 @@ async def verify_cmd(interaction, member: discord.Member):
     await interaction.followup.send(f"Verified {member.mention}.", ephemeral=True)
 
 
-@bot.tree.command(name="verifycount", description="Show verified vs unverified counts (admin only)")
+@bot.tree.command(name="verifycount", description="Show verified vs unverified counts")
 async def verifycount(interaction):
-    if not interaction.guild or not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Administrator permission required.", ephemeral=True)
+    if not interaction.guild or not is_staff(interaction):
+        await interaction.response.send_message("You need the APEX | STAFF role to use this command.", ephemeral=True)
         return
     guild = interaction.guild
     member_role = discord.utils.find(lambda r: r.name.strip().lower() == "apex | member", guild.roles)
@@ -293,43 +315,27 @@ async def verifycount(interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-def parse_duration(duration_str: str) -> int:
-    import re
-    total = 0
-    patterns = [
-        (r"(\d+)\s*d", 1440),
-        (r"(\d+)\s*h", 60),
-        (r"(\d+)\s*m", 1),
-    ]
-    for pattern, multiplier in patterns:
-        match = re.search(pattern, duration_str.lower())
-        if match:
-            total += int(match.group(1)) * multiplier
-    return total
-
-
-@bot.tree.command(name="gstart", description="Start a giveaway (admin only)")
+@bot.tree.command(name="gstart", description="Start a giveaway")
 @discord.app_commands.describe(
     prize="What are you giving away?",
-    duration="Duration e.g. 1d, 12h, 30m, 1d12h, 2h30m",
-    winners="Number of winners (default: 1)",
-    channel="Channel to post in (default: current channel)",
+    duration="How long e.g. 1d, 12h, 30m, 1d12h, 2h30m",
+    winners="Number of winners",
+    channel="Channel to post the giveaway in",
 )
-async def gstart(interaction: discord.Interaction, prize: str, duration: str, winners: int = 1, channel: discord.TextChannel = None):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Administrator permission required.", ephemeral=True)
+async def gstart(interaction: discord.Interaction, prize: str, duration: str, winners: int, channel: discord.TextChannel):
+    if not is_staff(interaction):
+        await interaction.response.send_message("You need the APEX | STAFF role to use this command.", ephemeral=True)
         return
     total_minutes = parse_duration(duration)
     if total_minutes <= 0:
         await interaction.response.send_message("Invalid duration. Use formats like `1d`, `12h`, `30m`, `1d12h`, `2h30m`.", ephemeral=True)
         return
-    target_channel = channel or interaction.channel
     end_time = datetime.now(timezone.utc) + timedelta(minutes=total_minutes)
     embed = build_giveaway_embed(prize, interaction.user, end_time, winners, 0)
-    await interaction.response.send_message(f"Giveaway started in {target_channel.mention}!", ephemeral=True)
-    msg = await target_channel.send(content="@everyone", embed=embed, view=GiveawayView())
+    await interaction.response.send_message(f"Giveaway started in {channel.mention}!", ephemeral=True)
+    msg = await channel.send(content="@everyone", embed=embed, view=GiveawayView())
     active_giveaways[msg.id] = {
-        "channel_id": target_channel.id,
+        "channel_id": channel.id,
         "guild_id": interaction.guild_id,
         "prize": prize,
         "host_id": interaction.user.id,
@@ -340,10 +346,10 @@ async def gstart(interaction: discord.Interaction, prize: str, duration: str, wi
     }
 
 
-@bot.tree.command(name="gend", description="End the active giveaway in this channel early (admin only)")
+@bot.tree.command(name="gend", description="End the active giveaway in this channel early")
 async def gend(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Administrator permission required.", ephemeral=True)
+    if not is_staff(interaction):
+        await interaction.response.send_message("You need the APEX | STAFF role to use this command.", ephemeral=True)
         return
 
     mid = None
@@ -363,10 +369,10 @@ async def gend(interaction: discord.Interaction):
     await end_giveaway(mid)
 
 
-@bot.tree.command(name="greroll", description="Reroll a winner from the last giveaway in this channel (admin only)")
+@bot.tree.command(name="greroll", description="Reroll a winner from the last giveaway in this channel")
 async def greroll(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Administrator permission required.", ephemeral=True)
+    if not is_staff(interaction):
+        await interaction.response.send_message("You need the APEX | STAFF role to use this command.", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True, thinking=True)
 
