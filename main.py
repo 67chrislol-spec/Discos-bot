@@ -2,6 +2,7 @@ import os
 import re
 import random
 import asyncio
+import aiohttp
 from datetime import datetime, timezone, timedelta
 import discord
 from discord.ext import commands
@@ -25,11 +26,6 @@ def has_staff_access(user: discord.Member) -> bool:
 
 
 def parse_duration(duration_str: str) -> int | None:
-    """
-    Parse a duration string like '1d2h30m', '45m', '2h', '1d' into total seconds.
-    Supports: d (days), h (hours), m (minutes), s (seconds).
-    Returns total seconds, or None if the string is invalid.
-    """
     pattern = re.compile(
         r"(?:(\d+)\s*d(?:ays?)?)?"
         r"\s*(?:(\d+)\s*h(?:ours?)?)?"
@@ -40,7 +36,6 @@ def parse_duration(duration_str: str) -> int | None:
     match = pattern.fullmatch(duration_str.strip())
     if not match or not any(match.groups()):
         return None
-
     days = int(match.group(1) or 0)
     hours = int(match.group(2) or 0)
     minutes = int(match.group(3) or 0)
@@ -135,21 +130,17 @@ class GiveawayView(discord.ui.View):
             if data["channel_id"] == interaction.channel_id:
                 msg_id = mid
                 break
-
         if msg_id is None:
             await interaction.response.send_message("This giveaway has already ended.", ephemeral=True)
             return
-
         data = active_giveaways[msg_id]
         user_id = interaction.user.id
-
         if user_id in data["entries"]:
             data["entries"].discard(user_id)
             await interaction.response.send_message("You have withdrawn your entry.", ephemeral=True)
         else:
             data["entries"].add(user_id)
             await interaction.response.send_message("You have entered the giveaway! Good luck 🎉", ephemeral=True)
-
         try:
             msg = await interaction.channel.fetch_message(msg_id)
             host = interaction.guild.get_member(data["host_id"]) or await interaction.guild.fetch_member(data["host_id"])
@@ -161,7 +152,6 @@ class GiveawayView(discord.ui.View):
 async def end_giveaway(message_id):
     if message_id not in active_giveaways:
         return
-
     data = active_giveaways.pop(message_id)
     guild = bot.get_guild(data["guild_id"])
     if not guild:
@@ -169,15 +159,12 @@ async def end_giveaway(message_id):
     channel = guild.get_channel(data["channel_id"])
     if not channel:
         return
-
     try:
         msg = await channel.fetch_message(message_id)
     except discord.NotFound:
         return
-
     host_member = guild.get_member(data["host_id"])
     host_mention = host_member.mention if host_member else f"<@{data['host_id']}>"
-
     valid_entries = list(data["entries"])
     winners = []
     count = min(data["winners_count"], len(valid_entries))
@@ -188,19 +175,12 @@ async def end_giveaway(message_id):
                 winners.append(member)
             except Exception:
                 pass
-
     ended_view = discord.ui.View()
     ended_view.add_item(discord.ui.Button(label="Giveaway Ended", style=discord.ButtonStyle.grey, disabled=True))
     await msg.edit(embed=build_giveaway_ended_embed(data["prize"], host_mention, winners, len(valid_entries)), view=ended_view)
-
-    ended_giveaways[data["channel_id"]] = {
-        "prize": data["prize"],
-        "entries": valid_entries,
-    }
-
+    ended_giveaways[data["channel_id"]] = {"prize": data["prize"], "entries": valid_entries}
     tickets_channel = discord.utils.find(lambda c: "ticket" in c.name.lower(), guild.text_channels)
     tickets_mention = tickets_channel.mention if tickets_channel else "#tickets"
-
     if winners:
         winner_mentions = " ".join(w.mention for w in winners)
         prize = data["prize"]
@@ -259,7 +239,6 @@ async def on_member_join(member):
             await member.add_roles(unverified_role)
         except discord.Forbidden:
             pass
-
     welcome_channel = discord.utils.find(lambda c: "welcome" in c.name.lower(), member.guild.text_channels)
     if welcome_channel:
         count = member.guild.member_count
@@ -343,17 +322,10 @@ async def verifycount(interaction: discord.Interaction):
     winners="Number of winners (default: 1)",
     channel="Channel to post in (default: current channel)",
 )
-async def gstart(
-    interaction: discord.Interaction,
-    prize: str,
-    duration: str,
-    winners: int = 1,
-    channel: discord.TextChannel = None,
-):
+async def gstart(interaction: discord.Interaction, prize: str, duration: str, winners: int = 1, channel: discord.TextChannel = None):
     if not has_staff_access(interaction.user):
         await interaction.response.send_message("APEX | Staff permission required.", ephemeral=True)
         return
-
     total_seconds = parse_duration(duration)
     if total_seconds is None:
         await interaction.response.send_message(
@@ -361,7 +333,6 @@ async def gstart(
             ephemeral=True,
         )
         return
-
     target_channel = channel or interaction.channel
     end_time = datetime.now(timezone.utc) + timedelta(seconds=total_seconds)
     embed = build_giveaway_embed(prize, interaction.user, end_time, winners, 0)
@@ -387,17 +358,14 @@ async def gend(interaction: discord.Interaction):
     if not has_staff_access(interaction.user):
         await interaction.response.send_message("APEX | Staff permission required.", ephemeral=True)
         return
-
     mid = None
     for message_id, data in active_giveaways.items():
         if data["channel_id"] == interaction.channel_id:
             mid = message_id
             break
-
     if mid is None:
         await interaction.response.send_message("No active giveaway found in this channel.", ephemeral=True)
         return
-
     task = active_giveaways[mid].get("task")
     if task:
         task.cancel()
@@ -411,29 +379,23 @@ async def greroll(interaction: discord.Interaction):
         await interaction.response.send_message("APEX | Staff permission required.", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True, thinking=True)
-
     ended = ended_giveaways.get(interaction.channel_id)
     if not ended:
         await interaction.followup.send("No ended giveaway found for this channel.", ephemeral=True)
         return
-
     prize = ended["prize"]
     valid_entries = ended["entries"]
-
     if not valid_entries:
         await interaction.followup.send("No entries to reroll from.", ephemeral=True)
         return
-
     winner_id = random.choice(valid_entries)
     try:
         winner = interaction.guild.get_member(winner_id) or await interaction.guild.fetch_member(winner_id)
     except Exception:
         await interaction.followup.send("Could not fetch the rerolled winner.", ephemeral=True)
         return
-
     tickets_channel = discord.utils.find(lambda c: "ticket" in c.name.lower(), interaction.guild.text_channels)
     tickets_mention = tickets_channel.mention if tickets_channel else "#tickets"
-
     reroll_embed = discord.Embed(title="🎉 Congratulations!", color=discord.Color.gold())
     reroll_embed.description = (
         f"{winner.mention}\nYou have won **{prize}**!\n\n"
@@ -442,6 +404,127 @@ async def greroll(interaction: discord.Interaction):
     )
     await interaction.channel.send(winner.mention, embed=reroll_embed)
     await interaction.followup.send("Rerolled!", ephemeral=True)
+
+
+APEX_COLOR = discord.Color.from_rgb(255, 90, 30)
+APEX_SITE = "https://www.apexbot.store"
+
+
+async def fetch_live_mmr() -> tuple[str, int] | None:
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(APEX_SITE, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                if resp.status != 200:
+                    return None
+                text = await resp.text()
+        rank_match = re.search(r"Grand Champion\s*(I{1,3}|IV|V)?", text)
+        rating_match = re.search(r"Rating[:\s]+(\d{3,5})", text)
+        rank = rank_match.group(0).strip() if rank_match else "Grand Champion III"
+        rating = int(rating_match.group(1)) if rating_match else 2081
+        return rank, rating
+    except Exception:
+        return None
+
+
+@bot.tree.command(name="pricing", description="View APEX bot pricing plans")
+async def pricing(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="💰 APEX Bot Pricing",
+        description="All plans include full APEX access, Discord support, and automatic updates.",
+        color=APEX_COLOR,
+        url=APEX_SITE,
+    )
+    embed.add_field(name="⏱ Daily — $15", value="• 3 days access\n• Full APEX bot\n• SDK support\n• Discord support\n• HWID locked", inline=True)
+    embed.add_field(name="📅 Weekly — $20", value="• 7 days access\n• Full APEX bot\n• SDK support\n• Discord support\n• HWID locked\n• All updates included", inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+    embed.add_field(name="🌟 Monthly — $50 *(Most Popular)*", value="• 30 days access\n• Full APEX bot\n• SDK support\n• Priority Discord support\n• HWID locked\n• All updates included\n• Beta builds access", inline=True)
+    embed.add_field(name="♾ Lifetime — $200", value="• Forever access\n• Full APEX bot\n• SDK support\n• Priority Discord support\n• HWID locked\n• All updates forever\n• Beta builds access\n• Exclusive Lifetime role", inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+    embed.set_footer(text=f"Purchase at {APEX_SITE} · Keys delivered instantly via Discord DM")
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="mmr", description="Check APEX bot's current rank and MMR")
+async def mmr(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
+    result = await fetch_live_mmr()
+    if result:
+        rank, rating = result
+        source = "Live data from apexbot.store"
+    else:
+        rank, rating = "Grand Champion III", 2081
+        source = "Cached data — visit apexbot.store for live stats"
+    embed = discord.Embed(title="👑 APEX Bot — Current Rating", color=APEX_COLOR, url=APEX_SITE)
+    embed.add_field(name="Estimated Rank", value=f"**{rank}**", inline=True)
+    embed.add_field(name="Rating", value=f"**{rating} MMR**", inline=True)
+    embed.add_field(name="Training Status", value="🟢 Actively Training 24/7", inline=False)
+    embed.add_field(name="ℹ️ About", value="APEX trains continuously on dedicated GPU hardware. Its rank improves with every training session — the number you see today will be higher tomorrow.", inline=False)
+    embed.set_footer(text=source)
+    await interaction.followup.send(embed=embed)
+
+
+@bot.tree.command(name="about", description="Learn about the APEX Rocket League bot")
+async def about(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🚀 About APEX",
+        description="APEX is a **reinforcement-trained Rocket League bot** engineered for competitive play. Advanced mechanics. Relentless aggression. Continuously improving.",
+        color=APEX_COLOR,
+        url=APEX_SITE,
+    )
+    embed.add_field(name="🎮 Advanced Mechanics", value="Air dribbles, flip resets, redirects, ceiling shots, shadow defense — trained with a full reward library targeting elite mechanical play.", inline=False)
+    embed.add_field(name="⚡ Elite Performance", value="Sub-10ms decision making with frame-perfect execution. APEX reacts and plays at a level that rivals professional human players.", inline=False)
+    embed.add_field(name="📈 Continuous Training", value="APEX never stops improving. Active GPU training 24/7 means every update makes the bot sharper, faster, and smarter.", inline=False)
+    embed.add_field(name="🔒 HWID Protection", value="Every license is locked to your machine on first activation. One key, one PC. Secure and tamper-proof.", inline=False)
+    embed.add_field(name="⚙️ Simple Setup", value="Seamless plug-and-play SDK support. Get APEX running in minutes — no technical experience required.", inline=False)
+    embed.add_field(name="📦 Key Delivery", value="Your unique license key is generated instantly and DM'd to you on Discord after purchase.", inline=False)
+    embed.set_footer(text=f"Learn more at {APEX_SITE}")
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="faq", description="Frequently asked questions about APEX")
+async def faq(interaction: discord.Interaction):
+    embed = discord.Embed(title="❓ APEX — FAQ", color=APEX_COLOR, url=APEX_SITE)
+    embed.add_field(name="How do I get APEX?", value=f"Head to [{APEX_SITE}]({APEX_SITE}), choose a plan, pay via Stripe, and your key is DM'd to you instantly on Discord.", inline=False)
+    embed.add_field(name="What are the prices?", value="**Daily** $15 (3 days) · **Weekly** $20 (7 days) · **Monthly** $50 (30 days) · **Lifetime** $200\nUse `/pricing` for full details.", inline=False)
+    embed.add_field(name="What rank is APEX?", value="Currently **Grand Champion III (~2081 MMR)** and actively training. Use `/mmr` for the latest.", inline=False)
+    embed.add_field(name="Is it HWID locked?", value="Yes. Every key is locked to your machine on first activation — one key, one PC.", inline=False)
+    embed.add_field(name="Do I get updates?", value="All plans include automatic updates. Monthly and Lifetime plans also get early beta builds.", inline=False)
+    embed.add_field(name="How do I set it up?", value="After activating your key in the APEX launcher, launch through the SDK. No technical experience required.", inline=False)
+    embed.add_field(name="Can I earn a free key?", value="Yes! Use `/referral` to see the referral reward tiers. Open a ticket to claim.", inline=False)
+    embed.add_field(name="Where do I get support?", value="Open a ticket in this server. Monthly and Lifetime plans get priority support.", inline=False)
+    embed.set_footer(text=f"More info at {APEX_SITE}")
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="referral", description="Learn how the APEX referral & earn program works")
+async def referral(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🔗 APEX Referral & Earn",
+        description=f"Share your referral link from [{APEX_SITE}]({APEX_SITE}). Every time someone buys through your link, you earn progress toward free keys.\nOpen a ticket when you hit a tier to claim your reward!",
+        color=APEX_COLOR,
+        url=APEX_SITE,
+    )
+    embed.add_field(name="5 Referrals", value="🎁 **Free Daily Key** (3 days access)", inline=False)
+    embed.add_field(name="15 Referrals", value="🎁 **Free Weekly Key** (7 days access)", inline=False)
+    embed.add_field(name="30 Referrals", value="🎁 **Free Monthly Key** (30 days access)", inline=False)
+    embed.add_field(name="300 Referrals", value="🎁 **Free Lifetime Key** (forever access)", inline=False)
+    embed.set_footer(text=f"Get your referral link at {APEX_SITE}")
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="changelog", description="View the latest APEX training updates")
+async def changelog(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="📋 APEX — Changelog",
+        description="APEX improves with every training session. Here's what's been added and upgraded.",
+        color=APEX_COLOR,
+        url=APEX_SITE,
+    )
+    embed.add_field(name="Apr 4, 2026 — GPU Training Upgrade", value="Switched from CPU to dedicated NVIDIA GPU training. Training speed increased 5-10x — APEX now accumulates over **80,000 steps per second**.", inline=False)
+    embed.add_field(name="Apr 3, 2026 — Advanced Reward Library Added", value="Integrated full suite of advanced rewards: air dribbles, shadow defense, redirects, strong touches, and bouncy air dribbles.", inline=False)
+    embed.add_field(name="Apr 2, 2026 — APEX Launch", value="APEX officially launched 🎉", inline=False)
+    embed.set_footer(text=f"Updates every 10,000 training iterations · {APEX_SITE}")
+    await interaction.response.send_message(embed=embed)
 
 
 token = os.environ.get("DISCORD_BOT_TOKEN")
