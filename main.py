@@ -293,22 +293,35 @@ async def verifycount(interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+def parse_duration(duration_str: str) -> int:
+    import re
+    total = 0
+    patterns = [
+        (r"(\d+)\s*d", 1440),
+        (r"(\d+)\s*h", 60),
+        (r"(\d+)\s*m", 1),
+    ]
+    for pattern, multiplier in patterns:
+        match = re.search(pattern, duration_str.lower())
+        if match:
+            total += int(match.group(1)) * multiplier
+    return total
+
+
 @bot.tree.command(name="gstart", description="Start a giveaway (admin only)")
 @discord.app_commands.describe(
     prize="What are you giving away?",
-    days="Duration in days (default: 0)",
-    hours="Duration in hours (default: 0)",
-    minutes="Duration in minutes (default: 0)",
+    duration="Duration e.g. 1d, 12h, 30m, 1d12h, 2h30m",
     winners="Number of winners (default: 1)",
     channel="Channel to post in (default: current channel)",
 )
-async def gstart(interaction: discord.Interaction, prize: str, days: int = 0, hours: int = 0, minutes: int = 0, winners: int = 1, channel: discord.TextChannel = None):
+async def gstart(interaction: discord.Interaction, prize: str, duration: str, winners: int = 1, channel: discord.TextChannel = None):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("Administrator permission required.", ephemeral=True)
         return
-    total_minutes = days * 1440 + hours * 60 + minutes
+    total_minutes = parse_duration(duration)
     if total_minutes <= 0:
-        await interaction.response.send_message("Please specify a duration using days, hours, and/or minutes.", ephemeral=True)
+        await interaction.response.send_message("Invalid duration. Use formats like `1d`, `12h`, `30m`, `1d12h`, `2h30m`.", ephemeral=True)
         return
     target_channel = channel or interaction.channel
     end_time = datetime.now(timezone.utc) + timedelta(minutes=total_minutes)
