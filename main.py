@@ -14,6 +14,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 VERIFY_URL = "https://discord.com/oauth2/authorize?client_id=1496753618861424700&response_type=code&redirect_uri=https%3A%2F%2Fapex-verify-d.up.railway.app%2Fcallback&scope=identify+guilds.join"
 
 active_giveaways = {}
+ended_giveaways = {}
 
 
 def build_verify_embed(guild):
@@ -144,19 +145,24 @@ async def end_giveaway(message_id):
     ended_view.add_item(discord.ui.Button(label="Giveaway Ended", style=discord.ButtonStyle.grey, disabled=True))
     await msg.edit(embed=build_giveaway_ended_embed(data["prize"], host_mention, winners, len(valid_entries)), view=ended_view)
 
+    ended_giveaways[data["channel_id"]] = {
+        "prize": data["prize"],
+        "entries": valid_entries,
+    }
+
+    tickets_channel = discord.utils.find(lambda c: "ticket" in c.name.lower(), guild.text_channels)
+    tickets_mention = tickets_channel.mention if tickets_channel else "#tickets"
+
     if winners:
-        await channel.send("@everyone\n" + " ".join(w.mention for w in winners) + f" won **{data['prize']}**! Congratulations!")
-        for winner in winners:
-            try:
-                dm = discord.Embed(title="🎊 Congratulations!", color=discord.Color.gold())
-                dm.description = (
-                    f"You have won **{data['prize']}**!\n\n"
-                    "⚠️ Open a ticket in the tickets channel within the next **24 hours** "
-                    "to claim your prize, or it will expire!"
-                )
-                await winner.send(embed=dm)
-            except discord.Forbidden:
-                pass
+        winner_mentions = " ".join(w.mention for w in winners)
+        prize = data["prize"]
+        congrats_embed = discord.Embed(title="🎉 Congratulations!", color=discord.Color.gold())
+        congrats_embed.description = (
+            f"{winner_mentions}\nYou have won **{prize}**!\n\n"
+            f"⚠️ Open a ticket in {tickets_mention} within the next **24 hours** "
+            "to claim your prize, or it will expire!"
+        )
+        await channel.send(winner_mentions, embed=congrats_embed)
     else:
         await channel.send(f"The giveaway for **{data['prize']}** ended with no valid entries.")
 
@@ -314,20 +320,22 @@ async def gstart(interaction: discord.Interaction, prize: str, duration: int, wi
     }
 
 
-@bot.tree.command(name="gend", description="End a giveaway early (admin only)")
-@discord.app_commands.describe(message_id="The message ID of the giveaway")
-async def gend(interaction: discord.Interaction, message_id: str):
+@bot.tree.command(name="gend", description="End the active giveaway in this channel early (admin only)")
+async def gend(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("Administrator permission required.", ephemeral=True)
         return
-    try:
-        mid = int(message_id)
-    except ValueError:
-        await interaction.response.send_message("Invalid message ID.", ephemeral=True)
+
+    mid = None
+    for message_id, data in active_giveaways.items():
+        if data["channel_id"] == interaction.channel_id:
+            mid = message_id
+            break
+
+    if mid is None:
+        await interaction.response.send_message("No active giveaway found in this channel.", ephemeral=True)
         return
-    if mid not in active_giveaways:
-        await interaction.response.send_message("No active giveaway with that ID.", ephemeral=True)
-        return
+
     task = active_giveaways[mid].get("task")
     if task:
         task.cancel()
@@ -335,34 +343,42 @@ async def gend(interaction: discord.Interaction, message_id: str):
     await end_giveaway(mid)
 
 
-@bot.tree.command(name="greroll", description="Reroll a giveaway winner (admin only)")
-@discord.app_commands.describe(message_id="The message ID of the ended giveaway")
-async def greroll(interaction: discord.Interaction, message_id: str):
+@bot.tree.command(name="greroll", description="Reroll a winner from the last giveaway in this channel (admin only)")
+async def greroll(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("Administrator permission required.", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True, thinking=True)
+
+    ended = ended_giveaways.get(interaction.channel_id)
+    if not ended:
+        await interaction.followup.send("No ended giveaway found for this channel.", ephemeral=True)
+        return
+
+    prize = ended["prize"]
+    valid_entries = ended["entries"]
+
+    if not valid_entries:
+        await interaction.followup.send("No entries to reroll from.", ephemeral=True)
+        return
+
+    winner_id = random.choice(valid_entries)
     try:
-        msg = await interaction.channel.fetch_message(int(message_id))
+        winner = interaction.guild.get_member(winner_id) or await interaction.guild.fetch_member(winner_id)
     except Exception:
-        await interaction.followup.send("Could not find that message.", ephemeral=True)
+        await interaction.followup.send("Could not fetch the rerolled winner.", ephemeral=True)
         return
-    if not msg.embeds or "GIVEAWAY ENDED" not in (msg.embeds[0].title or ""):
-        await interaction.followup.send("That doesn't look like an ended giveaway.", ephemeral=True)
-        return
-    prize = next((f.value for f in msg.embeds[0].fields if f.name == "Prize"), "the prize")
-    members = [m for m in interaction.guild.members if not m.bot]
-    if not members:
-        await interaction.followup.send("No members to reroll from.", ephemeral=True)
-        return
-    winner = random.choice(members)
-    await interaction.channel.send(f"🎉 Reroll! The new winner is {winner.mention} — congratulations on winning **{prize}**!")
-    try:
-        dm = discord.Embed(title="🎊 Congratulations!", color=discord.Color.gold())
-        dm.description = f"You have won **{prize}**!\n\n⚠️ Open a ticket in the tickets channel within the next **24 hours** to claim your prize, or it will expire!"
-        await winner.send(embed=dm)
-    except discord.Forbidden:
-        pass
+
+    tickets_channel = discord.utils.find(lambda c: "ticket" in c.name.lower(), interaction.guild.text_channels)
+    tickets_mention = tickets_channel.mention if tickets_channel else "#tickets"
+
+    reroll_embed = discord.Embed(title="🎉 Congratulations!", color=discord.Color.gold())
+    reroll_embed.description = (
+        f"{winner.mention}\nYou have won **{prize}**!\n\n"
+        f"⚠️ Open a ticket in {tickets_mention} within the next **24 hours** "
+        "to claim your prize, or it will expire!"
+    )
+    await interaction.channel.send(winner.mention, embed=reroll_embed)
     await interaction.followup.send("Rerolled!", ephemeral=True)
 
 
