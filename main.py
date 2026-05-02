@@ -203,6 +203,7 @@ async def giveaway_timer(message_id, delay):
 @bot.event
 async def on_ready():
     print("Logged in as " + str(bot.user))
+    bot.add_view(GiveawayView())  # register persistent giveaway button
     for guild in bot.guilds:
         await ensure_verify_embed(guild)
     try:
@@ -531,4 +532,4 @@ token = os.environ.get("DISCORD_BOT_TOKEN")
 if not token:
     raise RuntimeError("DISCORD_BOT_TOKEN environment variable is not set")
 
-bot.run(token) 
+bot.run(token)
