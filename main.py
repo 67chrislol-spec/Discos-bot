@@ -300,29 +300,42 @@ async def mute(ctx, member: discord.Member = None, duration: str = None, *, reas
 
     until = datetime.now(timezone.utc) + timedelta(seconds=total_seconds)
 
+    if not ctx.guild.me.guild_permissions.moderate_members:
+        await ctx.send("I'm missing the **Moderate Members** permission. Please give it to my role in Server Settings.", delete_after=15)
+        return
+
+    if member.top_role >= ctx.guild.me.top_role:
+        await ctx.send(f"I can't mute {member.mention} because their role is equal to or higher than mine. Move my role above theirs in Server Settings.", delete_after=15)
+        return
+
     try:
         await member.timeout(until, reason=reason or "Muted by staff")
     except discord.Forbidden:
-        await ctx.send("I don't have permission to mute that member.", delete_after=10)
+        await ctx.send("Still missing permissions. Make sure my role is above the target member's role and I have **Moderate Members** enabled.", delete_after=15)
         return
     except discord.HTTPException as e:
         await ctx.send(f"Failed to mute: {e}", delete_after=10)
         return
 
     embed = discord.Embed(
-        title="🔇 Member Muted",
-        color=discord.Color.red(),
+        title="🔇  M U T E D",
+        description=f"**{member.mention} has been silenced.**\n{'─' * 32}",
+        color=0xFF0000,
+        timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(name="User", value=member.mention, inline=True)
-    embed.add_field(name="Muted by", value=ctx.author.mention, inline=True)
-    embed.add_field(name="Duration", value=format_duration(total_seconds), inline=True)
-    embed.add_field(name="Expires", value=f"<t:{int(until.timestamp())}:R>", inline=True)
-    if reason:
-        embed.add_field(name="Reason", value=reason, inline=False)
+    embed.set_author(name=f"Action by {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
     embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="👤  User", value=f"{member.mention}\n`{member.name}`", inline=True)
+    embed.add_field(name="🛡️  Moderator", value=f"{ctx.author.mention}\n`{ctx.author.name}`", inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+    embed.add_field(name="⏱️  Duration", value=f"`{format_duration(total_seconds)}`", inline=True)
+    embed.add_field(name="🕐  Expires", value=f"<t:{int(until.timestamp())}:R>\n<t:{int(until.timestamp())}:f>", inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+    embed.add_field(name="📋  Reason", value=f"> {reason}" if reason else "> *No reason provided*", inline=False)
+    embed.set_footer(text="APEX Moderation", icon_url=ctx.guild.icon.url if ctx.guild.icon else discord.Embed.Empty)
 
     await ctx.send(
-        content=f"{member.mention} you have been muted for being a retard",
+        content=f"🔇 {member.mention} **you have been muted for being a retard**",
         embed=embed,
     )
 
