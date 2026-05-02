@@ -11,7 +11,7 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix=["!", "."], intents=intents)
 
 VERIFY_URL = "https://discord.com/oauth2/authorize?client_id=1496753618861424700&response_type=code&redirect_uri=https%3A%2F%2Fapex-verify-d.up.railway.app%2Fcallback&scope=identify+guilds.join"
 
@@ -267,6 +267,99 @@ async def setup(ctx):
     except discord.HTTPException:
         pass
     await ctx.send(embed=build_verify_embed(ctx.guild), view=build_verify_view())
+
+
+@bot.command(name="mute")
+async def mute(ctx, member: discord.Member = None, duration: str = None, *, reason: str = None):
+    if not has_staff_access(ctx.author):
+        await ctx.message.delete()
+        return
+
+    try:
+        await ctx.message.delete()
+    except discord.HTTPException:
+        pass
+
+    if member is None:
+        await ctx.send("Usage: `.mute @user <duration> [reason]`\nDuration examples: `10m`, `1h`, `2h30m`, `1d`", delete_after=10)
+        return
+
+    if duration is None:
+        await ctx.send("Please provide a duration. Examples: `10m`, `1h`, `2h30m`, `1d`", delete_after=10)
+        return
+
+    total_seconds = parse_duration(duration)
+    if total_seconds is None:
+        await ctx.send("Invalid duration. Use formats like `10m`, `1h`, `2h30m`, `1d`.", delete_after=10)
+        return
+
+    max_seconds = 28 * 24 * 3600
+    if total_seconds > max_seconds:
+        await ctx.send("Duration cannot exceed 28 days (Discord limit).", delete_after=10)
+        return
+
+    until = datetime.now(timezone.utc) + timedelta(seconds=total_seconds)
+
+    try:
+        await member.timeout(until, reason=reason or "Muted by staff")
+    except discord.Forbidden:
+        await ctx.send("I don't have permission to mute that member.", delete_after=10)
+        return
+    except discord.HTTPException as e:
+        await ctx.send(f"Failed to mute: {e}", delete_after=10)
+        return
+
+    embed = discord.Embed(
+        title="🔇 Member Muted",
+        color=discord.Color.red(),
+    )
+    embed.add_field(name="User", value=member.mention, inline=True)
+    embed.add_field(name="Muted by", value=ctx.author.mention, inline=True)
+    embed.add_field(name="Duration", value=format_duration(total_seconds), inline=True)
+    embed.add_field(name="Expires", value=f"<t:{int(until.timestamp())}:R>", inline=True)
+    if reason:
+        embed.add_field(name="Reason", value=reason, inline=False)
+    embed.set_thumbnail(url=member.display_avatar.url)
+
+    await ctx.send(
+        content=f"{member.mention} you have been muted for being a retard",
+        embed=embed,
+    )
+
+
+@bot.command(name="unmute")
+async def unmute(ctx, member: discord.Member = None):
+    if not has_staff_access(ctx.author):
+        await ctx.message.delete()
+        return
+
+    try:
+        await ctx.message.delete()
+    except discord.HTTPException:
+        pass
+
+    if member is None:
+        await ctx.send("Usage: `.unmute @user`", delete_after=10)
+        return
+
+    try:
+        await member.timeout(None, reason=f"Unmuted by {ctx.author}")
+    except discord.Forbidden:
+        await ctx.send("I don't have permission to unmute that member.", delete_after=10)
+        return
+    except discord.HTTPException as e:
+        await ctx.send(f"Failed to unmute: {e}", delete_after=10)
+        return
+
+    embed = discord.Embed(
+        title="🔊 Member Unmuted",
+        color=discord.Color.green(),
+    )
+    embed.add_field(name="User", value=member.mention, inline=True)
+    embed.add_field(name="Unmuted by", value=ctx.author.mention, inline=True)
+    embed.set_thumbnail(url=member.display_avatar.url)
+
+    await ctx.send(embed=embed)
 
 
 @bot.tree.command(name="verify", description="Manually verify a member (staff only)")
