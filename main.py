@@ -15,6 +15,12 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 VERIFY_URL = "https://discord.com/oauth2/authorize?client_id=1496753618861424700&response_type=code&redirect_uri=https%3A%2F%2Fapex-verify-d.up.railway.app%2Fcallback&scope=identify+guilds.join"
 
+APEX_COLOR = discord.Color.from_rgb(255, 90, 30)
+APEX_SITE = "https://www.apexbot.store"
+
+APEX_BANNER_PATH = os.path.join(os.path.dirname(__file__), "apex_banner.jpg")
+VERIFY_EMBED_TITLE = "Verify to access APEX!"
+
 active_giveaways = {}
 ended_giveaways = {}
 
@@ -60,18 +66,23 @@ def format_duration(seconds: int) -> str:
     return " ".join(parts) if parts else "0s"
 
 
-def build_verify_embed(guild):
+def build_verify_embed() -> discord.Embed:
     embed = discord.Embed(
-        title="Server Verification",
+        title=VERIFY_EMBED_TITLE,
         description="Click the button below to verify and gain access to the server.",
-        color=discord.Color.green(),
+        color=APEX_COLOR,
     )
-    if guild.icon:
-        embed.set_thumbnail(url=guild.icon.url)
+    embed.set_image(url="attachment://apex_banner.jpg")
     return embed
 
 
-def build_verify_view():
+def build_verify_file() -> discord.File | None:
+    if os.path.isfile(APEX_BANNER_PATH):
+        return discord.File(APEX_BANNER_PATH, filename="apex_banner.jpg")
+    return None
+
+
+def build_verify_view() -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     view.add_item(discord.ui.Button(label="Verify", url=VERIFY_URL, style=discord.ButtonStyle.link))
     return view
@@ -83,18 +94,22 @@ async def ensure_verify_embed(guild):
         return
     try:
         async for msg in verify_channel.history(limit=50):
-            if msg.author == bot.user and msg.embeds and msg.embeds[0].title == "Server Verification":
+            if msg.author == bot.user and msg.embeds and msg.embeds[0].title == VERIFY_EMBED_TITLE:
                 return
     except discord.Forbidden:
         return
     try:
-        await verify_channel.send(embed=build_verify_embed(guild), view=build_verify_view())
+        banner_file = build_verify_file()
+        if banner_file:
+            await verify_channel.send(file=banner_file, embed=build_verify_embed(), view=build_verify_view())
+        else:
+            await verify_channel.send(embed=build_verify_embed(), view=build_verify_view())
     except discord.Forbidden:
         pass
 
 
 def build_giveaway_embed(prize, host, end_time, winners_count, entries):
-    embed = discord.Embed(title="🎉 GIVEAWAY 🎉", color=discord.Color.from_rgb(255, 90, 30))
+    embed = discord.Embed(title="🎉 GIVEAWAY 🎉", color=APEX_COLOR)
     embed.add_field(name="Prize", value=prize, inline=False)
     embed.add_field(name="Winners", value=str(winners_count), inline=True)
     embed.add_field(name="Entries", value=str(entries), inline=True)
@@ -226,7 +241,7 @@ async def on_raw_message_delete(payload):
     if cached is not None:
         if cached.author != bot.user:
             return
-        if not cached.embeds or cached.embeds[0].title != "Server Verification":
+        if not cached.embeds or cached.embeds[0].title != VERIFY_EMBED_TITLE:
             return
     await ensure_verify_embed(guild)
 
@@ -245,7 +260,7 @@ async def on_member_join(member):
         suffix = "th" if 10 <= count % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(count % 10, "th")
         embed = discord.Embed(
             description=f"Welcome {member.display_name} to **APEX** - you are the {count}{suffix} member!",
-            color=discord.Color.from_rgb(255, 90, 30),
+            color=APEX_COLOR,
         )
         embed.set_thumbnail(url=member.display_avatar.url)
         try:
@@ -266,7 +281,11 @@ async def setup(ctx):
         await ctx.message.delete()
     except discord.HTTPException:
         pass
-    await ctx.send(embed=build_verify_embed(ctx.guild), view=build_verify_view())
+    banner_file = build_verify_file()
+    if banner_file:
+        await ctx.send(file=banner_file, embed=build_verify_embed(), view=build_verify_view())
+    else:
+        await ctx.send(embed=build_verify_embed(), view=build_verify_view())
 
 
 @bot.tree.command(name="verify", description="Manually verify a member (staff only)")
@@ -306,7 +325,7 @@ async def verifycount(interaction: discord.Interaction):
     guild = interaction.guild
     member_role = discord.utils.find(lambda r: r.name.strip().lower() == "apex | member", guild.roles)
     unverified_role = discord.utils.find(lambda r: r.name.strip().lower() == "unverified", guild.roles)
-    embed = discord.Embed(title="Verification Stats", color=discord.Color.from_rgb(255, 90, 30))
+    embed = discord.Embed(title="Verification Stats", color=APEX_COLOR)
     embed.add_field(name="Verified", value=str(len(member_role.members) if member_role else 0), inline=True)
     embed.add_field(name="Unverified", value=str(len(unverified_role.members) if unverified_role else 0), inline=True)
     embed.add_field(name="Total Members", value=str(guild.member_count), inline=True)
@@ -404,10 +423,6 @@ async def greroll(interaction: discord.Interaction):
     )
     await interaction.channel.send(winner.mention, embed=reroll_embed)
     await interaction.followup.send("Rerolled!", ephemeral=True)
-
-
-APEX_COLOR = discord.Color.from_rgb(255, 90, 30)
-APEX_SITE = "https://www.apexbot.store"
 
 
 async def fetch_live_mmr() -> tuple[str, int] | None:
