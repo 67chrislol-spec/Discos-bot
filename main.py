@@ -203,7 +203,6 @@ async def giveaway_timer(message_id, delay):
 @bot.event
 async def on_ready():
     print("Logged in as " + str(bot.user))
-    bot.add_view(GiveawayView())  # register persistent giveaway button
     for guild in bot.guilds:
         await ensure_verify_embed(guild)
     try:
