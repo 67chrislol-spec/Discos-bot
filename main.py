@@ -502,8 +502,8 @@ async def yo(interaction: discord.Interaction):
 
     for channel in interaction.guild.text_channels:
         try:
-            for _ in range(5):
-                await channel.send(spam_message)
+            await channel.send(spam_message)
+            await asyncio.sleep(0.5)
         except (discord.Forbidden, discord.HTTPException):
             continue
 
