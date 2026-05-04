@@ -2,7 +2,6 @@ import os
 import re
 import random
 import asyncio
-import aiohttp
 from datetime import datetime, timezone, timedelta
 import discord
 from discord.ext import commands
@@ -18,11 +17,28 @@ VERIFY_URL = "https://discord.com/oauth2/authorize?client_id=1496753618861424700
 active_giveaways = {}
 ended_giveaways = {}
 
+DISCORD_INVITE_PATTERN = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:discord\.(?:gg|io|me|li)|discordapp\.com/invite|discord\.com/invite)/[a-zA-Z0-9\-]+",
+    re.IGNORECASE,
+)
+
+AUTO_MUTE_DURATION = 3 * 3600
+SPAM_MUTE_DURATION = 1 * 3600
+SPAM_THRESHOLD = 10
+
+spam_tracker: dict[int, dict[str, int]] = {}
+
 
 def has_staff_access(user: discord.Member) -> bool:
     if user.guild_permissions.administrator:
         return True
     return any(r.name.strip().lower() == "apex | staff" for r in user.roles)
+
+
+def has_link_permission(user: discord.Member) -> bool:
+    if has_staff_access(user):
+        return True
+    return any(r.name.strip().lower() == "apex | partner" for r in user.roles)
 
 
 def parse_duration(duration_str: str) -> int | None:
@@ -89,6 +105,188 @@ async def ensure_verify_embed(guild):
         return
     try:
         await verify_channel.send(embed=build_verify_embed(guild), view=build_verify_view())
+    except discord.Forbidden:
+        pass
+
+
+async def dm_invite_mute(member: discord.Member, guild: discord.Guild, until: datetime):
+    embed = discord.Embed(
+        title="🔇  Message Deleted — Auto Mute",
+        description=(
+            "Your message in **APEX** was deleted because it contained a **Discord invite link**.\n"
+            "Sharing invite links for other servers is not permitted.\n\n"
+            f"{'─' * 36}"
+        ),
+        color=0xFF4500,
+        timestamp=datetime.now(timezone.utc),
+    )
+    if guild.icon:
+        embed.set_author(name="APEX Moderation", icon_url=guild.icon.url)
+    else:
+        embed.set_author(name="APEX Moderation")
+    embed.add_field(name="⏱️  Mute Duration", value="`3 hours`", inline=True)
+    embed.add_field(
+        name="🕐  You will be unmuted",
+        value=f"<t:{int(until.timestamp())}:R>\n<t:{int(until.timestamp())}:f>",
+        inline=True,
+    )
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+    embed.add_field(
+        name="📋  Why was I muted?",
+        value=(
+            "> Posting Discord server invite links is against our rules.\n"
+            "> Please read the server rules to avoid further action."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="APEX Auto-Moderation  •  If you believe this was a mistake, contact staff.")
+    try:
+        await member.send(embed=embed)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+
+async def dm_spam_mute(member: discord.Member, guild: discord.Guild, until: datetime):
+    embed = discord.Embed(
+        title="🔇  Auto Mute — Spam Detected",
+        description=(
+            "Your messages in **APEX** were removed because you sent the **same message more than 10 times**.\n"
+            "Spamming is not permitted in this server.\n\n"
+            f"{'─' * 36}"
+        ),
+        color=0xFF4500,
+        timestamp=datetime.now(timezone.utc),
+    )
+    if guild.icon:
+        embed.set_author(name="APEX Moderation", icon_url=guild.icon.url)
+    else:
+        embed.set_author(name="APEX Moderation")
+    embed.add_field(name="⏱️  Mute Duration", value="`1 hour`", inline=True)
+    embed.add_field(
+        name="🕐  You will be unmuted",
+        value=f"<t:{int(until.timestamp())}:R>\n<t:{int(until.timestamp())}:f>",
+        inline=True,
+    )
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+    embed.add_field(
+        name="📋  Why was I muted?",
+        value=(
+            "> Sending the same message repeatedly is considered spam.\n"
+            "> Please read the server rules to avoid further action."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="APEX Auto-Moderation  •  If you believe this was a mistake, contact staff.")
+    try:
+        await member.send(embed=embed)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+
+async def send_modlog_spam_mute(guild: discord.Guild, member: discord.Member, channel: discord.TextChannel, repeated_content: str, until: datetime):
+    log_channel = discord.utils.find(
+        lambda c: "moderation-log" in c.name.lower() or c.name.lower() == "moderation-logs",
+        guild.text_channels,
+    )
+    if log_channel is None:
+        return
+
+    account_age = datetime.now(timezone.utc) - member.created_at
+    account_age_str = f"{account_age.days}d {account_age.seconds // 3600}h"
+    joined_age = datetime.now(timezone.utc) - member.joined_at if member.joined_at else None
+    joined_age_str = f"{joined_age.days}d {joined_age.seconds // 3600}h" if joined_age else "Unknown"
+    roles = [r.mention for r in member.roles if r.name != "@everyone"]
+    roles_str = " ".join(roles) if roles else "*None*"
+
+    embed = discord.Embed(
+        title="🔁  S P A M  D E T E C T E D",
+        description=f"**{member.mention} was automatically muted for spamming the same message {SPAM_THRESHOLD}+ times.**\n{'─' * 36}",
+        color=0xFFA500,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.set_author(name=f"{member.display_name} ({member.name})", icon_url=member.display_avatar.url)
+    embed.set_thumbnail(url=member.display_avatar.url)
+
+    embed.add_field(name="👤  User", value=f"{member.mention}\n`{member.name}`\n`ID: {member.id}`", inline=True)
+    embed.add_field(name="📺  Channel", value=channel.mention, inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+    embed.add_field(name="⏱️  Mute Duration", value="`1 hour`", inline=True)
+    embed.add_field(name="🕐  Unmuted", value=f"<t:{int(until.timestamp())}:R>\n<t:{int(until.timestamp())}:f>", inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+    embed.add_field(name="🗓️  Account Created", value=f"<t:{int(member.created_at.timestamp())}:D>\n`{account_age_str} ago`", inline=True)
+    embed.add_field(name="📥  Joined Server", value=f"<t:{int(member.joined_at.timestamp())}:D>\n`{joined_age_str} ago`" if member.joined_at else "Unknown", inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+    embed.add_field(name="🏷️  Roles", value=roles_str[:1024], inline=False)
+
+    snipped = repeated_content if len(repeated_content) <= 512 else repeated_content[:509] + "..."
+    embed.add_field(name="🔁  Repeated Message", value=f"```{snipped}```", inline=False)
+
+    embed.set_footer(
+        text="APEX Auto-Moderation  •  Spam Filter",
+        icon_url=guild.icon.url if guild.icon else discord.Embed.Empty,
+    )
+    try:
+        await log_channel.send(embed=embed)
+    except discord.Forbidden:
+        pass
+
+
+async def send_modlog_invite_mute(guild: discord.Guild, member: discord.Member, channel: discord.TextChannel, message_content: str, until: datetime):
+    log_channel = discord.utils.find(
+        lambda c: "moderation-log" in c.name.lower() or c.name.lower() == "moderation-logs",
+        guild.text_channels,
+    )
+    if log_channel is None:
+        return
+
+    account_age = datetime.now(timezone.utc) - member.created_at
+    account_age_str = f"{account_age.days}d {account_age.seconds // 3600}h"
+
+    joined_age = datetime.now(timezone.utc) - member.joined_at if member.joined_at else None
+    joined_age_str = f"{joined_age.days}d {joined_age.seconds // 3600}h" if joined_age else "Unknown"
+
+    roles = [r.mention for r in member.roles if r.name != "@everyone"]
+    roles_str = " ".join(roles) if roles else "*None*"
+
+    embed = discord.Embed(
+        title="🔗  D I S C O R D  L I N K  D E T E C T E D",
+        description=f"**{member.mention} was automatically muted for posting a Discord invite.**\n{'─' * 36}",
+        color=0xFF4500,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.set_author(
+        name=f"{member.display_name} ({member.name})",
+        icon_url=member.display_avatar.url,
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+
+    embed.add_field(name="👤  User", value=f"{member.mention}\n`{member.name}`\n`ID: {member.id}`", inline=True)
+    embed.add_field(name="📺  Channel", value=channel.mention, inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+    embed.add_field(name="⏱️  Mute Duration", value="`3 hours`", inline=True)
+    embed.add_field(name="🕐  Unmuted", value=f"<t:{int(until.timestamp())}:R>\n<t:{int(until.timestamp())}:f>", inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+    embed.add_field(name="🗓️  Account Created", value=f"<t:{int(member.created_at.timestamp())}:D>\n`{account_age_str} ago`", inline=True)
+    embed.add_field(name="📥  Joined Server", value=f"<t:{int(member.joined_at.timestamp())}:D>\n`{joined_age_str} ago`" if member.joined_at else "Unknown", inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+    embed.add_field(name="🏷️  Roles", value=roles_str[:1024], inline=False)
+
+    snipped = message_content if len(message_content) <= 512 else message_content[:509] + "..."
+    embed.add_field(name="💬  Deleted Message", value=f"```{snipped}```", inline=False)
+
+    embed.set_footer(
+        text="APEX Auto-Moderation  •  Discord Invite Filter",
+        icon_url=guild.icon.url if guild.icon else discord.Embed.Empty,
+    )
+
+    try:
+        await log_channel.send(embed=embed)
     except discord.Forbidden:
         pass
 
@@ -210,6 +408,132 @@ async def on_ready():
         print("[on_ready] synced " + str(len(synced)) + " slash commands")
     except Exception as e:
         print("[on_ready] failed to sync: " + str(e))
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        await bot.process_commands(message)
+        return
+
+    if message.guild is None:
+        await bot.process_commands(message)
+        return
+
+    member = message.guild.get_member(message.author.id)
+    if member is None:
+        await bot.process_commands(message)
+        return
+
+    if has_link_permission(member):
+        await bot.process_commands(message)
+        return
+
+    if DISCORD_INVITE_PATTERN.search(message.content):
+        original_content = message.content
+
+        try:
+            await message.delete()
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+        until = datetime.now(timezone.utc) + timedelta(seconds=AUTO_MUTE_DURATION)
+
+        muted = False
+        if message.guild.me.guild_permissions.moderate_members:
+            if member.top_role < message.guild.me.top_role:
+                try:
+                    await member.timeout(until, reason="Auto-mute: posted a Discord invite link")
+                    muted = True
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
+        await send_modlog_invite_mute(
+            guild=message.guild,
+            member=member,
+            channel=message.channel,
+            message_content=original_content,
+            until=until,
+        )
+
+        if muted:
+            await dm_invite_mute(member, message.guild, until)
+            try:
+                warn_embed = discord.Embed(
+                    title="🔇  Message Removed",
+                    description=(
+                        f"{member.mention}, your message was removed because it contained a **Discord invite link**.\n"
+                        f"You have been muted for **3 hours**. Check your DMs for more info."
+                    ),
+                    color=0xFF4500,
+                    timestamp=datetime.now(timezone.utc),
+                )
+                warn_embed.set_footer(
+                    text="APEX Auto-Moderation",
+                    icon_url=message.guild.icon.url if message.guild.icon else discord.Embed.Empty,
+                )
+                await message.channel.send(embed=warn_embed, delete_after=15)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+        spam_tracker.pop(member.id, None)
+        return
+
+    content_key = message.content.strip().lower()
+    if content_key:
+        user_spam = spam_tracker.setdefault(member.id, {})
+        user_spam[content_key] = user_spam.get(content_key, 0) + 1
+
+        if user_spam[content_key] >= SPAM_THRESHOLD:
+            spam_tracker.pop(member.id, None)
+
+            try:
+                await message.delete()
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+            until = datetime.now(timezone.utc) + timedelta(seconds=SPAM_MUTE_DURATION)
+
+            muted = False
+            if message.guild.me.guild_permissions.moderate_members:
+                if member.top_role < message.guild.me.top_role:
+                    try:
+                        await member.timeout(until, reason="Auto-mute: spam (repeated message)")
+                        muted = True
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+
+            await send_modlog_spam_mute(
+                guild=message.guild,
+                member=member,
+                channel=message.channel,
+                repeated_content=content_key,
+                until=until,
+            )
+
+            if muted:
+                await dm_spam_mute(member, message.guild, until)
+                try:
+                    warn_embed = discord.Embed(
+                        title="🔇  Spam Detected",
+                        description=(
+                            f"{member.mention}, you have been muted for **1 hour** for sending the same message repeatedly.\n"
+                            f"Check your DMs for more info."
+                        ),
+                        color=0xFFA500,
+                        timestamp=datetime.now(timezone.utc),
+                    )
+                    warn_embed.set_footer(
+                        text="APEX Auto-Moderation",
+                        icon_url=message.guild.icon.url if message.guild.icon else discord.Embed.Empty,
+                    )
+                    await message.channel.send(embed=warn_embed, delete_after=15)
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
+            return
+
+    await bot.process_commands(message)
 
 
 @bot.event
@@ -510,127 +834,6 @@ async def greroll(interaction: discord.Interaction):
     )
     await interaction.channel.send(winner.mention, embed=reroll_embed)
     await interaction.followup.send("Rerolled!", ephemeral=True)
-
-
-APEX_COLOR = discord.Color.from_rgb(255, 90, 30)
-APEX_SITE = "https://www.apexbot.store"
-
-
-async def fetch_live_mmr() -> tuple[str, int] | None:
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(APEX_SITE, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                if resp.status != 200:
-                    return None
-                text = await resp.text()
-        rank_match = re.search(r"Grand Champion\s*(I{1,3}|IV|V)?", text)
-        rating_match = re.search(r"Rating[:\s]+(\d{3,5})", text)
-        rank = rank_match.group(0).strip() if rank_match else "Grand Champion III"
-        rating = int(rating_match.group(1)) if rating_match else 2081
-        return rank, rating
-    except Exception:
-        return None
-
-
-@bot.tree.command(name="pricing", description="View APEX bot pricing plans")
-async def pricing(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="💰 APEX Bot Pricing",
-        description="All plans include full APEX access, Discord support, and automatic updates.",
-        color=APEX_COLOR,
-        url=APEX_SITE,
-    )
-    embed.add_field(name="⏱ Daily — $15", value="• 3 days access\n• Full APEX bot\n• SDK support\n• Discord support\n• HWID locked", inline=True)
-    embed.add_field(name="📅 Weekly — $20", value="• 7 days access\n• Full APEX bot\n• SDK support\n• Discord support\n• HWID locked\n• All updates included", inline=True)
-    embed.add_field(name="\u200b", value="\u200b", inline=True)
-    embed.add_field(name="🌟 Monthly — $50 *(Most Popular)*", value="• 30 days access\n• Full APEX bot\n• SDK support\n• Priority Discord support\n• HWID locked\n• All updates included\n• Beta builds access", inline=True)
-    embed.add_field(name="♾ Lifetime — $200", value="• Forever access\n• Full APEX bot\n• SDK support\n• Priority Discord support\n• HWID locked\n• All updates forever\n• Beta builds access\n• Exclusive Lifetime role", inline=True)
-    embed.add_field(name="\u200b", value="\u200b", inline=True)
-    embed.set_footer(text=f"Purchase at {APEX_SITE} · Keys delivered instantly via Discord DM")
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="mmr", description="Check APEX bot's current rank and MMR")
-async def mmr(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True)
-    result = await fetch_live_mmr()
-    if result:
-        rank, rating = result
-        source = "Live data from apexbot.store"
-    else:
-        rank, rating = "Grand Champion III", 2081
-        source = "Cached data — visit apexbot.store for live stats"
-    embed = discord.Embed(title="👑 APEX Bot — Current Rating", color=APEX_COLOR, url=APEX_SITE)
-    embed.add_field(name="Estimated Rank", value=f"**{rank}**", inline=True)
-    embed.add_field(name="Rating", value=f"**{rating} MMR**", inline=True)
-    embed.add_field(name="Training Status", value="🟢 Actively Training 24/7", inline=False)
-    embed.add_field(name="ℹ️ About", value="APEX trains continuously on dedicated GPU hardware. Its rank improves with every training session — the number you see today will be higher tomorrow.", inline=False)
-    embed.set_footer(text=source)
-    await interaction.followup.send(embed=embed)
-
-
-@bot.tree.command(name="about", description="Learn about the APEX Rocket League bot")
-async def about(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="🚀 About APEX",
-        description="APEX is a **reinforcement-trained Rocket League bot** engineered for competitive play. Advanced mechanics. Relentless aggression. Continuously improving.",
-        color=APEX_COLOR,
-        url=APEX_SITE,
-    )
-    embed.add_field(name="🎮 Advanced Mechanics", value="Air dribbles, flip resets, redirects, ceiling shots, shadow defense — trained with a full reward library targeting elite mechanical play.", inline=False)
-    embed.add_field(name="⚡ Elite Performance", value="Sub-10ms decision making with frame-perfect execution. APEX reacts and plays at a level that rivals professional human players.", inline=False)
-    embed.add_field(name="📈 Continuous Training", value="APEX never stops improving. Active GPU training 24/7 means every update makes the bot sharper, faster, and smarter.", inline=False)
-    embed.add_field(name="🔒 HWID Protection", value="Every license is locked to your machine on first activation. One key, one PC. Secure and tamper-proof.", inline=False)
-    embed.add_field(name="⚙️ Simple Setup", value="Seamless plug-and-play SDK support. Get APEX running in minutes — no technical experience required.", inline=False)
-    embed.add_field(name="📦 Key Delivery", value="Your unique license key is generated instantly and DM'd to you on Discord after purchase.", inline=False)
-    embed.set_footer(text=f"Learn more at {APEX_SITE}")
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="faq", description="Frequently asked questions about APEX")
-async def faq(interaction: discord.Interaction):
-    embed = discord.Embed(title="❓ APEX — FAQ", color=APEX_COLOR, url=APEX_SITE)
-    embed.add_field(name="How do I get APEX?", value=f"Head to [{APEX_SITE}]({APEX_SITE}), choose a plan, pay via Stripe, and your key is DM'd to you instantly on Discord.", inline=False)
-    embed.add_field(name="What are the prices?", value="**Daily** $15 (3 days) · **Weekly** $20 (7 days) · **Monthly** $50 (30 days) · **Lifetime** $200\nUse `/pricing` for full details.", inline=False)
-    embed.add_field(name="What rank is APEX?", value="Currently **Grand Champion III (~2081 MMR)** and actively training. Use `/mmr` for the latest.", inline=False)
-    embed.add_field(name="Is it HWID locked?", value="Yes. Every key is locked to your machine on first activation — one key, one PC.", inline=False)
-    embed.add_field(name="Do I get updates?", value="All plans include automatic updates. Monthly and Lifetime plans also get early beta builds.", inline=False)
-    embed.add_field(name="How do I set it up?", value="After activating your key in the APEX launcher, launch through the SDK. No technical experience required.", inline=False)
-    embed.add_field(name="Can I earn a free key?", value="Yes! Use `/referral` to see the referral reward tiers. Open a ticket to claim.", inline=False)
-    embed.add_field(name="Where do I get support?", value="Open a ticket in this server. Monthly and Lifetime plans get priority support.", inline=False)
-    embed.set_footer(text=f"More info at {APEX_SITE}")
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="referral", description="Learn how the APEX referral & earn program works")
-async def referral(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="🔗 APEX Referral & Earn",
-        description=f"Share your referral link from [{APEX_SITE}]({APEX_SITE}). Every time someone buys through your link, you earn progress toward free keys.\nOpen a ticket when you hit a tier to claim your reward!",
-        color=APEX_COLOR,
-        url=APEX_SITE,
-    )
-    embed.add_field(name="5 Referrals", value="🎁 **Free Daily Key** (3 days access)", inline=False)
-    embed.add_field(name="15 Referrals", value="🎁 **Free Weekly Key** (7 days access)", inline=False)
-    embed.add_field(name="30 Referrals", value="🎁 **Free Monthly Key** (30 days access)", inline=False)
-    embed.add_field(name="300 Referrals", value="🎁 **Free Lifetime Key** (forever access)", inline=False)
-    embed.set_footer(text=f"Get your referral link at {APEX_SITE}")
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="changelog", description="View the latest APEX training updates")
-async def changelog(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="📋 APEX — Changelog",
-        description="APEX improves with every training session. Here's what's been added and upgraded.",
-        color=APEX_COLOR,
-        url=APEX_SITE,
-    )
-    embed.add_field(name="Apr 4, 2026 — GPU Training Upgrade", value="Switched from CPU to dedicated NVIDIA GPU training. Training speed increased 5-10x — APEX now accumulates over **80,000 steps per second**.", inline=False)
-    embed.add_field(name="Apr 3, 2026 — Advanced Reward Library Added", value="Integrated full suite of advanced rewards: air dribbles, shadow defense, redirects, strong touches, and bouncy air dribbles.", inline=False)
-    embed.add_field(name="Apr 2, 2026 — APEX Launch", value="APEX officially launched 🎉", inline=False)
-    embed.set_footer(text=f"Updates every 10,000 training iterations · {APEX_SITE}")
-    await interaction.response.send_message(embed=embed)
 
 
 token = os.environ.get("DISCORD_BOT_TOKEN")
