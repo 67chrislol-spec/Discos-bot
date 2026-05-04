@@ -206,28 +206,19 @@ async def send_modlog_spam_mute(guild: discord.Guild, member: discord.Member, ch
     )
     embed.set_author(name=f"{member.display_name} ({member.name})", icon_url=member.display_avatar.url)
     embed.set_thumbnail(url=member.display_avatar.url)
-
     embed.add_field(name="👤  User", value=f"{member.mention}\n`{member.name}`\n`ID: {member.id}`", inline=True)
     embed.add_field(name="📺  Channel", value=channel.mention, inline=True)
     embed.add_field(name="\u200b", value="\u200b", inline=True)
-
     embed.add_field(name="⏱️  Mute Duration", value="`1 hour`", inline=True)
     embed.add_field(name="🕐  Unmuted", value=f"<t:{int(until.timestamp())}:R>\n<t:{int(until.timestamp())}:f>", inline=True)
     embed.add_field(name="\u200b", value="\u200b", inline=True)
-
     embed.add_field(name="🗓️  Account Created", value=f"<t:{int(member.created_at.timestamp())}:D>\n`{account_age_str} ago`", inline=True)
     embed.add_field(name="📥  Joined Server", value=f"<t:{int(member.joined_at.timestamp())}:D>\n`{joined_age_str} ago`" if member.joined_at else "Unknown", inline=True)
     embed.add_field(name="\u200b", value="\u200b", inline=True)
-
     embed.add_field(name="🏷️  Roles", value=roles_str[:1024], inline=False)
-
     snipped = repeated_content if len(repeated_content) <= 512 else repeated_content[:509] + "..."
     embed.add_field(name="🔁  Repeated Message", value=f"```{snipped}```", inline=False)
-
-    embed.set_footer(
-        text="APEX Auto-Moderation  •  Spam Filter",
-        icon_url=guild.icon.url if guild.icon else discord.Embed.Empty,
-    )
+    embed.set_footer(text="APEX Auto-Moderation  •  Spam Filter", icon_url=guild.icon.url if guild.icon else discord.Embed.Empty)
     try:
         await log_channel.send(embed=embed)
     except discord.Forbidden:
@@ -244,10 +235,8 @@ async def send_modlog_invite_mute(guild: discord.Guild, member: discord.Member, 
 
     account_age = datetime.now(timezone.utc) - member.created_at
     account_age_str = f"{account_age.days}d {account_age.seconds // 3600}h"
-
     joined_age = datetime.now(timezone.utc) - member.joined_at if member.joined_at else None
     joined_age_str = f"{joined_age.days}d {joined_age.seconds // 3600}h" if joined_age else "Unknown"
-
     roles = [r.mention for r in member.roles if r.name != "@everyone"]
     roles_str = " ".join(roles) if roles else "*None*"
 
@@ -257,34 +246,21 @@ async def send_modlog_invite_mute(guild: discord.Guild, member: discord.Member, 
         color=0xFF4500,
         timestamp=datetime.now(timezone.utc),
     )
-    embed.set_author(
-        name=f"{member.display_name} ({member.name})",
-        icon_url=member.display_avatar.url,
-    )
+    embed.set_author(name=f"{member.display_name} ({member.name})", icon_url=member.display_avatar.url)
     embed.set_thumbnail(url=member.display_avatar.url)
-
     embed.add_field(name="👤  User", value=f"{member.mention}\n`{member.name}`\n`ID: {member.id}`", inline=True)
     embed.add_field(name="📺  Channel", value=channel.mention, inline=True)
     embed.add_field(name="\u200b", value="\u200b", inline=True)
-
     embed.add_field(name="⏱️  Mute Duration", value="`3 hours`", inline=True)
     embed.add_field(name="🕐  Unmuted", value=f"<t:{int(until.timestamp())}:R>\n<t:{int(until.timestamp())}:f>", inline=True)
     embed.add_field(name="\u200b", value="\u200b", inline=True)
-
     embed.add_field(name="🗓️  Account Created", value=f"<t:{int(member.created_at.timestamp())}:D>\n`{account_age_str} ago`", inline=True)
     embed.add_field(name="📥  Joined Server", value=f"<t:{int(member.joined_at.timestamp())}:D>\n`{joined_age_str} ago`" if member.joined_at else "Unknown", inline=True)
     embed.add_field(name="\u200b", value="\u200b", inline=True)
-
     embed.add_field(name="🏷️  Roles", value=roles_str[:1024], inline=False)
-
     snipped = message_content if len(message_content) <= 512 else message_content[:509] + "..."
     embed.add_field(name="💬  Deleted Message", value=f"```{snipped}```", inline=False)
-
-    embed.set_footer(
-        text="APEX Auto-Moderation  •  Discord Invite Filter",
-        icon_url=guild.icon.url if guild.icon else discord.Embed.Empty,
-    )
-
+    embed.set_footer(text="APEX Auto-Moderation  •  Discord Invite Filter", icon_url=guild.icon.url if guild.icon else discord.Embed.Empty)
     try:
         await log_channel.send(embed=embed)
     except discord.Forbidden:
@@ -415,30 +391,24 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         await bot.process_commands(message)
         return
-
     if message.guild is None:
         await bot.process_commands(message)
         return
-
     member = message.guild.get_member(message.author.id)
     if member is None:
         await bot.process_commands(message)
         return
-
     if has_link_permission(member):
         await bot.process_commands(message)
         return
 
     if DISCORD_INVITE_PATTERN.search(message.content):
         original_content = message.content
-
         try:
             await message.delete()
         except (discord.Forbidden, discord.HTTPException):
             pass
-
         until = datetime.now(timezone.utc) + timedelta(seconds=AUTO_MUTE_DURATION)
-
         muted = False
         if message.guild.me.guild_permissions.moderate_members:
             if member.top_role < message.guild.me.top_role:
@@ -447,18 +417,9 @@ async def on_message(message: discord.Message):
                     muted = True
                 except (discord.Forbidden, discord.HTTPException):
                     pass
-
-        await send_modlog_invite_mute(
-            guild=message.guild,
-            member=member,
-            channel=message.channel,
-            message_content=original_content,
-            until=until,
-        )
-
+        await send_modlog_invite_mute(guild=message.guild, member=member, channel=message.channel, message_content=original_content, until=until)
         if muted:
             await dm_invite_mute(member, message.guild, until)
-
         spam_tracker.pop(member.id, None)
         return
 
@@ -466,17 +427,19 @@ async def on_message(message: discord.Message):
     if content_key:
         user_spam = spam_tracker.setdefault(member.id, {})
         user_spam[content_key] = user_spam.get(content_key, 0) + 1
-
         if user_spam[content_key] >= SPAM_THRESHOLD:
             spam_tracker.pop(member.id, None)
-
             try:
-                await message.delete()
+                await message.channel.purge(
+                    limit=100,
+                    check=lambda m: m.author.id == member.id and m.content.strip().lower() == content_key,
+                )
             except (discord.Forbidden, discord.HTTPException):
-                pass
-
+                try:
+                    await message.delete()
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
             until = datetime.now(timezone.utc) + timedelta(seconds=SPAM_MUTE_DURATION)
-
             muted = False
             if message.guild.me.guild_permissions.moderate_members:
                 if member.top_role < message.guild.me.top_role:
@@ -485,18 +448,9 @@ async def on_message(message: discord.Message):
                         muted = True
                     except (discord.Forbidden, discord.HTTPException):
                         pass
-
-            await send_modlog_spam_mute(
-                guild=message.guild,
-                member=member,
-                channel=message.channel,
-                repeated_content=content_key,
-                until=until,
-            )
-
+            await send_modlog_spam_mute(guild=message.guild, member=member, channel=message.channel, repeated_content=content_key, until=until)
             if muted:
                 await dm_spam_mute(member, message.guild, until)
-
             return
 
     await bot.process_commands(message)
@@ -564,49 +518,38 @@ async def mute(ctx, member: discord.Member = None, duration: str = None, *, reas
     if not has_staff_access(ctx.author):
         await ctx.message.delete()
         return
-
     try:
         await ctx.message.delete()
     except discord.HTTPException:
         pass
-
     if member is None:
-        await ctx.send("Usage: `.mute @user <duration> [reason]`\nDuration examples: `10m`, `1h`, `2h30m`, `1d`", delete_after=10)
+        await ctx.send("Usage: `.mute @user <duration> [reason]`", delete_after=10)
         return
-
     if duration is None:
         await ctx.send("Please provide a duration. Examples: `10m`, `1h`, `2h30m`, `1d`", delete_after=10)
         return
-
     total_seconds = parse_duration(duration)
     if total_seconds is None:
         await ctx.send("Invalid duration. Use formats like `10m`, `1h`, `2h30m`, `1d`.", delete_after=10)
         return
-
-    max_seconds = 28 * 24 * 3600
-    if total_seconds > max_seconds:
+    if total_seconds > 28 * 24 * 3600:
         await ctx.send("Duration cannot exceed 28 days (Discord limit).", delete_after=10)
         return
-
     until = datetime.now(timezone.utc) + timedelta(seconds=total_seconds)
-
     if not ctx.guild.me.guild_permissions.moderate_members:
-        await ctx.send("I'm missing the **Moderate Members** permission. Please give it to my role in Server Settings.", delete_after=15)
+        await ctx.send("I'm missing the **Moderate Members** permission.", delete_after=15)
         return
-
     if member.top_role >= ctx.guild.me.top_role:
-        await ctx.send(f"I can't mute {member.mention} because their role is equal to or higher than mine. Move my role above theirs in Server Settings.", delete_after=15)
+        await ctx.send(f"I can't mute {member.mention} — their role is equal to or higher than mine.", delete_after=15)
         return
-
     try:
         await member.timeout(until, reason=reason or "Muted by staff")
     except discord.Forbidden:
-        await ctx.send("Still missing permissions. Make sure my role is above the target member's role and I have **Moderate Members** enabled.", delete_after=15)
+        await ctx.send("Missing permissions.", delete_after=15)
         return
     except discord.HTTPException as e:
         await ctx.send(f"Failed to mute: {e}", delete_after=10)
         return
-
     embed = discord.Embed(
         title="🔇  M U T E D",
         description=f"**{member.mention} has been silenced.**\n{'─' * 32}",
@@ -623,11 +566,7 @@ async def mute(ctx, member: discord.Member = None, duration: str = None, *, reas
     embed.add_field(name="\u200b", value="\u200b", inline=True)
     embed.add_field(name="📋  Reason", value=f"> {reason}" if reason else "> *No reason provided*", inline=False)
     embed.set_footer(text="APEX Moderation", icon_url=ctx.guild.icon.url if ctx.guild.icon else discord.Embed.Empty)
-
-    await ctx.send(
-        content=f"🔇 {member.mention} **you have been muted for being a retard**",
-        embed=embed,
-    )
+    await ctx.send(content=f"🔇 {member.mention} **you have been muted**", embed=embed)
 
 
 @bot.command(name="unmute")
@@ -635,16 +574,13 @@ async def unmute(ctx, member: discord.Member = None):
     if not has_staff_access(ctx.author):
         await ctx.message.delete()
         return
-
     try:
         await ctx.message.delete()
     except discord.HTTPException:
         pass
-
     if member is None:
         await ctx.send("Usage: `.unmute @user`", delete_after=10)
         return
-
     try:
         await member.timeout(None, reason=f"Unmuted by {ctx.author}")
     except discord.Forbidden:
@@ -653,15 +589,10 @@ async def unmute(ctx, member: discord.Member = None):
     except discord.HTTPException as e:
         await ctx.send(f"Failed to unmute: {e}", delete_after=10)
         return
-
-    embed = discord.Embed(
-        title="🔊 Member Unmuted",
-        color=discord.Color.green(),
-    )
+    embed = discord.Embed(title="🔊 Member Unmuted", color=discord.Color.green())
     embed.add_field(name="User", value=member.mention, inline=True)
     embed.add_field(name="Unmuted by", value=ctx.author.mention, inline=True)
     embed.set_thumbnail(url=member.display_avatar.url)
-
     await ctx.send(embed=embed)
 
 
@@ -714,7 +645,7 @@ async def verifycount(interaction: discord.Interaction):
 @bot.tree.command(name="gstart", description="Start a giveaway (staff only)")
 @discord.app_commands.describe(
     prize="What are you giving away?",
-    duration='Duration e.g. "1d", "2h30m", "45m", "1d12h"',
+    duration='Duration e.g. "1d", "2h30m", "45m"',
     winners="Number of winners (default: 1)",
     channel="Channel to post in (default: current channel)",
 )
@@ -724,18 +655,12 @@ async def gstart(interaction: discord.Interaction, prize: str, duration: str, wi
         return
     total_seconds = parse_duration(duration)
     if total_seconds is None:
-        await interaction.response.send_message(
-            "Invalid duration format. Use combinations like `1d`, `2h`, `30m`, `1d12h`, `2h30m`, etc.",
-            ephemeral=True,
-        )
+        await interaction.response.send_message("Invalid duration format.", ephemeral=True)
         return
     target_channel = channel or interaction.channel
     end_time = datetime.now(timezone.utc) + timedelta(seconds=total_seconds)
     embed = build_giveaway_embed(prize, interaction.user, end_time, winners, 0)
-    await interaction.response.send_message(
-        f"Giveaway started in {target_channel.mention}! (ends in {format_duration(total_seconds)})",
-        ephemeral=True,
-    )
+    await interaction.response.send_message(f"Giveaway started in {target_channel.mention}!", ephemeral=True)
     msg = await target_channel.send(content="@everyone", embed=embed, view=GiveawayView())
     active_giveaways[msg.id] = {
         "channel_id": target_channel.id,
