@@ -467,7 +467,7 @@ async def unmuteall(ctx):
     unmuted = 0
     failed = 0
 
-    for member in ctx.guild.members:
+    async for member in ctx.guild.fetch_members(limit=None):
         if member.bot:
             continue
         if member.is_timed_out():
@@ -491,6 +491,21 @@ async def unmuteall(ctx):
 
     await status_msg.delete()
     await ctx.send(embed=embed)
+
+
+@bot.tree.command(name="yo", description="Spam the APEX invite in all channels")
+async def yo(interaction: discord.Interaction):
+    await interaction.response.send_message("🚀 Spamming...", ephemeral=True)
+
+    invite = "https://discord.gg/apexrlbot"
+    spam_message = "\n".join([invite] * 10)
+
+    for channel in interaction.guild.text_channels:
+        try:
+            for _ in range(5):
+                await channel.send(spam_message)
+        except (discord.Forbidden, discord.HTTPException):
+            continue
 
 
 @bot.tree.command(name="verify", description="Manually verify a member (staff only)")
