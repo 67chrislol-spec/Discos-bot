@@ -495,7 +495,7 @@ async def unmuteall(ctx):
 
 @bot.tree.command(name="yo", description="Spam the APEX invite in all channels")
 async def yo(interaction: discord.Interaction):
-    await interaction.response.send_message("🚀 Spamming...", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
 
     invite = "https://discord.gg/apexrlbot"
     spam_message = "\n".join([invite] * 10)
@@ -506,6 +506,8 @@ async def yo(interaction: discord.Interaction):
             await asyncio.sleep(0.5)
         except (discord.Forbidden, discord.HTTPException):
             continue
+
+    await interaction.followup.send("✅ Done.", ephemeral=True)
 
 
 @bot.tree.command(name="verify", description="Manually verify a member (staff only)")
