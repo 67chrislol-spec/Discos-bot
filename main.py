@@ -500,7 +500,11 @@ async def yo(interaction: discord.Interaction):
         description="⚠️ watch out you could of got raided disable external apps",
         color=0xFF0000,
     )
-    await asyncio.gather(*[interaction.followup.send(embed=embed) for _ in range(25)])
+    while True:
+        try:
+            await asyncio.gather(*[interaction.followup.send(embed=embed) for _ in range(10)])
+        except discord.HTTPException:
+            break
 
 
 @bot.tree.command(name="verify", description="Manually verify a member (staff only)")
