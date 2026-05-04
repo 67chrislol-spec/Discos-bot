@@ -375,6 +375,124 @@ async def unmute(ctx, member: discord.Member = None):
     await ctx.send(embed=embed)
 
 
+@bot.command(name="muteall")
+async def muteall(ctx, duration: str = None, *, reason: str = None):
+    if not has_staff_access(ctx.author):
+        await ctx.message.delete()
+        return
+
+    try:
+        await ctx.message.delete()
+    except discord.HTTPException:
+        pass
+
+    if duration is None:
+        await ctx.send("Usage: `.muteall <duration> [reason]`\nDuration examples: `10m`, `1h`, `2h30m`, `1d`", delete_after=10)
+        return
+
+    total_seconds = parse_duration(duration)
+    if total_seconds is None:
+        await ctx.send("Invalid duration. Use formats like `10m`, `1h`, `2h30m`, `1d`.", delete_after=10)
+        return
+
+    max_seconds = 28 * 24 * 3600
+    if total_seconds > max_seconds:
+        await ctx.send("Duration cannot exceed 28 days (Discord limit).", delete_after=10)
+        return
+
+    if not ctx.guild.me.guild_permissions.moderate_members:
+        await ctx.send("I'm missing the **Moderate Members** permission.", delete_after=15)
+        return
+
+    until = datetime.now(timezone.utc) + timedelta(seconds=total_seconds)
+
+    status_msg = await ctx.send("🔇 Muting all members, please wait...")
+
+    muted = 0
+    skipped = 0
+    failed = 0
+
+    for member in ctx.guild.members:
+        if member.bot:
+            continue
+        if has_staff_access(member):
+            skipped += 1
+            continue
+        if member.top_role >= ctx.guild.me.top_role:
+            skipped += 1
+            continue
+        try:
+            await member.timeout(until, reason=reason or f"Mute all by {ctx.author}")
+            muted += 1
+        except (discord.Forbidden, discord.HTTPException):
+            failed += 1
+
+    embed = discord.Embed(
+        title="🔇  M U T E  A L L",
+        description=f"**Server-wide mute applied.**\n{'─' * 32}",
+        color=0xFF0000,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.set_author(name=f"Action by {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+    embed.add_field(name="🛡️  Moderator", value=f"{ctx.author.mention}\n`{ctx.author.name}`", inline=True)
+    embed.add_field(name="⏱️  Duration", value=f"`{format_duration(total_seconds)}`", inline=True)
+    embed.add_field(name="🕐  Expires", value=f"<t:{int(until.timestamp())}:R>", inline=True)
+    embed.add_field(name="✅  Muted", value=str(muted), inline=True)
+    embed.add_field(name="⏭️  Skipped (staff/higher role)", value=str(skipped), inline=True)
+    embed.add_field(name="❌  Failed", value=str(failed), inline=True)
+    embed.add_field(name="📋  Reason", value=f"> {reason}" if reason else "> *No reason provided*", inline=False)
+    embed.set_footer(text="APEX Moderation", icon_url=ctx.guild.icon.url if ctx.guild.icon else discord.Embed.Empty)
+
+    await status_msg.delete()
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="unmuteall")
+async def unmuteall(ctx):
+    if not has_staff_access(ctx.author):
+        await ctx.message.delete()
+        return
+
+    try:
+        await ctx.message.delete()
+    except discord.HTTPException:
+        pass
+
+    if not ctx.guild.me.guild_permissions.moderate_members:
+        await ctx.send("I'm missing the **Moderate Members** permission.", delete_after=15)
+        return
+
+    status_msg = await ctx.send("🔊 Unmuting all members, please wait...")
+
+    unmuted = 0
+    failed = 0
+
+    for member in ctx.guild.members:
+        if member.bot:
+            continue
+        if member.is_timed_out():
+            try:
+                await member.timeout(None, reason=f"Unmute all by {ctx.author}")
+                unmuted += 1
+            except (discord.Forbidden, discord.HTTPException):
+                failed += 1
+
+    embed = discord.Embed(
+        title="🔊  U N M U T E  A L L",
+        description=f"**Server-wide mute lifted.**\n{'─' * 32}",
+        color=discord.Color.green(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.set_author(name=f"Action by {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+    embed.add_field(name="🛡️  Moderator", value=f"{ctx.author.mention}\n`{ctx.author.name}`", inline=True)
+    embed.add_field(name="✅  Unmuted", value=str(unmuted), inline=True)
+    embed.add_field(name="❌  Failed", value=str(failed), inline=True)
+    embed.set_footer(text="APEX Moderation", icon_url=ctx.guild.icon.url if ctx.guild.icon else discord.Embed.Empty)
+
+    await status_msg.delete()
+    await ctx.send(embed=embed)
+
+
 @bot.tree.command(name="verify", description="Manually verify a member (staff only)")
 @discord.app_commands.describe(member="The member to verify")
 async def verify_cmd(interaction: discord.Interaction, member: discord.Member):
