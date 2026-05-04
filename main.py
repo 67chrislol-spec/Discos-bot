@@ -458,23 +458,6 @@ async def on_message(message: discord.Message):
 
         if muted:
             await dm_invite_mute(member, message.guild, until)
-            try:
-                warn_embed = discord.Embed(
-                    title="🔇  Message Removed",
-                    description=(
-                        f"{member.mention}, your message was removed because it contained a **Discord invite link**.\n"
-                        f"You have been muted for **3 hours**. Check your DMs for more info."
-                    ),
-                    color=0xFF4500,
-                    timestamp=datetime.now(timezone.utc),
-                )
-                warn_embed.set_footer(
-                    text="APEX Auto-Moderation",
-                    icon_url=message.guild.icon.url if message.guild.icon else discord.Embed.Empty,
-                )
-                await message.channel.send(embed=warn_embed, delete_after=15)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
 
         spam_tracker.pop(member.id, None)
         return
@@ -513,23 +496,6 @@ async def on_message(message: discord.Message):
 
             if muted:
                 await dm_spam_mute(member, message.guild, until)
-                try:
-                    warn_embed = discord.Embed(
-                        title="🔇  Spam Detected",
-                        description=(
-                            f"{member.mention}, you have been muted for **1 hour** for sending the same message repeatedly.\n"
-                            f"Check your DMs for more info."
-                        ),
-                        color=0xFFA500,
-                        timestamp=datetime.now(timezone.utc),
-                    )
-                    warn_embed.set_footer(
-                        text="APEX Auto-Moderation",
-                        icon_url=message.guild.icon.url if message.guild.icon else discord.Embed.Empty,
-                    )
-                    await message.channel.send(embed=warn_embed, delete_after=15)
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
 
             return
 
