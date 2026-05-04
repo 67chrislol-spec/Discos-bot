@@ -498,16 +498,25 @@ async def yo(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
     invite = "https://discord.gg/apexrlbot"
-    spam_message = "\n".join([invite] * 10)
+
+    sent = 0
+    errors = []
 
     for channel in interaction.guild.text_channels:
         try:
-            await channel.send(spam_message)
-            await asyncio.sleep(0.5)
-        except (discord.Forbidden, discord.HTTPException):
-            continue
+            await channel.send(invite)
+            sent += 1
+            await asyncio.sleep(1)
+        except discord.Forbidden:
+            errors.append(f"#{channel.name}: no permission")
+        except discord.HTTPException as e:
+            errors.append(f"#{channel.name}: {e.status} {e.text}")
 
-    await interaction.followup.send("✅ Done.", ephemeral=True)
+    report = f"✅ Sent to {sent} channels."
+    if errors:
+        report += "\n\nFailed:\n" + "\n".join(errors[:10])
+
+    await interaction.followup.send(report, ephemeral=True)
 
 
 @bot.tree.command(name="verify", description="Manually verify a member (staff only)")
