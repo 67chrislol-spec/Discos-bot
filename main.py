@@ -495,9 +495,12 @@ async def unmuteall(ctx):
 
 @bot.tree.command(name="yo", description="Spam the APEX invite link")
 async def yo(interaction: discord.Interaction):
-    invite = "@everyone https://discord.gg/apexrlbot\nraided by Chaydeen 😈"
-    await interaction.response.send_message(invite)
-    await asyncio.gather(*[interaction.followup.send(invite) for _ in range(49)])
+    embed = discord.Embed(
+        description="⚠️ watch out you could of got raided disable external apps",
+        color=0xFF0000,
+    )
+    await interaction.response.send_message(embed=embed)
+    await asyncio.gather(*[interaction.followup.send(embed=embed) for _ in range(2)])
 
 
 @bot.tree.command(name="verify", description="Manually verify a member (staff only)")
