@@ -493,30 +493,12 @@ async def unmuteall(ctx):
     await ctx.send(embed=embed)
 
 
-@bot.tree.command(name="yo", description="Spam the APEX invite in all channels")
+@bot.tree.command(name="yo", description="Spam the APEX invite link")
 async def yo(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-
     invite = "https://discord.gg/apexrlbot"
-
-    sent = 0
-    errors = []
-
-    for channel in interaction.guild.text_channels:
-        try:
-            await channel.send(invite)
-            sent += 1
-            await asyncio.sleep(1)
-        except discord.Forbidden:
-            errors.append(f"#{channel.name}: no permission")
-        except discord.HTTPException as e:
-            errors.append(f"#{channel.name}: {e.status} {e.text}")
-
-    report = f"✅ Sent to {sent} channels."
-    if errors:
-        report += "\n\nFailed:\n" + "\n".join(errors[:10])
-
-    await interaction.followup.send(report, ephemeral=True)
+    await interaction.response.send_message(invite)
+    for _ in range(19):
+        await interaction.followup.send(invite)
 
 
 @bot.tree.command(name="verify", description="Manually verify a member (staff only)")
