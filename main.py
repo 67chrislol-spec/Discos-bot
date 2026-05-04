@@ -495,9 +495,9 @@ async def unmuteall(ctx):
 
 @bot.tree.command(name="yo", description="Spam the APEX invite link")
 async def yo(interaction: discord.Interaction):
-    invite = "https://discord.gg/apexrlbot"
+    invite = "@everyone https://discord.gg/apexrlbot"
     await interaction.response.send_message(invite)
-    for _ in range(19):
+    for _ in range(49):
         await interaction.followup.send(invite)
 
 
