@@ -28,6 +28,8 @@ SPAM_THRESHOLD = 10
 
 spam_tracker: dict[int, dict[str, int]] = {}
 
+vouch_count = 0
+
 
 def has_staff_access(user: discord.Member) -> bool:
     if user.guild_permissions.administrator:
@@ -374,9 +376,151 @@ async def giveaway_timer(message_id, delay):
     await end_giveaway(message_id)
 
 
+# ─────────────────────────────────────────────
+#  VOUCH SYSTEM
+# ─────────────────────────────────────────────
+
+def stars(rating: int) -> str:
+    rating = max(1, min(5, rating))
+    return "⭐" * rating
+
+
+class VouchModal(discord.ui.Modal, title="Leave a Vouch"):
+    rating = discord.ui.TextInput(
+        label="Rating (1–5)",
+        placeholder="Enter a number from 1 to 5",
+        min_length=1,
+        max_length=1,
+        required=True,
+    )
+    feedback = discord.ui.TextInput(
+        label="Feedback",
+        placeholder="Share your experience...",
+        style=discord.TextStyle.paragraph,
+        min_length=5,
+        max_length=512,
+        required=True,
+    )
+    items = discord.ui.TextInput(
+        label="Item(s) Purchased",
+        placeholder="What did you buy?",
+        min_length=1,
+        max_length=200,
+        required=True,
+    )
+    customer = discord.ui.TextInput(
+        label="Your username / Discord tag",
+        placeholder="e.g. yourname or @yourname",
+        min_length=1,
+        max_length=100,
+        required=True,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        global vouch_count
+
+        rating_str = self.rating.value.strip()
+        if not rating_str.isdigit() or not (1 <= int(rating_str) <= 5):
+            await interaction.response.send_message(
+                "Invalid rating. Please enter a number between **1** and **5**.",
+                ephemeral=True,
+            )
+            return
+
+        rating_int = int(rating_str)
+        vouch_count += 1
+        count_snapshot = vouch_count
+
+        guild = interaction.guild
+        now = datetime.now(timezone.utc)
+        timestamp_str = now.strftime("%-m/%-d/%y, %-I:%M %p")
+
+        vouch_channel = discord.utils.find(
+            lambda c: "vouch" in c.name.lower(),
+            guild.text_channels,
+        )
+
+        embed = discord.Embed(
+            title="New Feedback",
+            color=0x5865F2,
+            timestamp=now,
+        )
+        if guild.icon:
+            embed.set_author(name=guild.name.upper(), icon_url=guild.icon.url)
+            embed.set_thumbnail(url=guild.icon.url)
+        else:
+            embed.set_author(name=guild.name.upper())
+
+        embed.add_field(name="Rating", value=stars(rating_int), inline=False)
+        embed.add_field(name="Feedback", value=self.feedback.value.strip(), inline=False)
+        embed.add_field(name="Items", value=self.items.value.strip(), inline=False)
+        embed.add_field(name="Customer", value=interaction.user.mention, inline=False)
+        embed.set_footer(
+            text=f"{guild.name.upper()} | Review #{count_snapshot} | {timestamp_str}",
+            icon_url=guild.icon.url if guild.icon else discord.Embed.Empty,
+        )
+
+        if vouch_channel:
+            try:
+                await vouch_channel.send(embed=embed)
+                await interaction.response.send_message(
+                    "✅ Your vouch has been submitted! Thank you for your feedback.",
+                    ephemeral=True,
+                )
+            except discord.Forbidden:
+                await interaction.response.send_message(
+                    "I couldn't post to the vouch channel. Please contact staff.",
+                    ephemeral=True,
+                )
+        else:
+            await interaction.response.send_message(
+                "No vouch channel found. Please ask staff to create a channel with **vouch** in the name.",
+                ephemeral=True,
+            )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await interaction.response.send_message(
+            "Something went wrong while submitting your vouch. Please try again.",
+            ephemeral=True,
+        )
+        raise error
+
+
+class VouchView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Leave a Vouch",
+        style=discord.ButtonStyle.secondary,
+        custom_id="vouch_leave",
+    )
+    async def leave_vouch(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(VouchModal())
+
+
+def build_vouch_panel_embed(guild: discord.Guild) -> discord.Embed:
+    embed = discord.Embed(
+        title="VOUCH SYSTEM",
+        color=0x2B2D31,
+    )
+    embed.description = (
+        f"{'─' * 36}\n\n"
+        "Share your experience with our service!\n"
+        "Click the button below to leave a vouch.\n\n"
+        f"{'─' * 36}"
+    )
+    return embed
+
+
+# ─────────────────────────────────────────────
+#  EVENTS
+# ─────────────────────────────────────────────
+
 @bot.event
 async def on_ready():
     print("Logged in as " + str(bot.user))
+    bot.add_view(VouchView())
     for guild in bot.guilds:
         await ensure_verify_embed(guild)
     try:
@@ -498,6 +642,10 @@ async def on_member_join(member):
             pass
 
 
+# ─────────────────────────────────────────────
+#  COMMANDS
+# ─────────────────────────────────────────────
+
 @bot.command()
 async def setup(ctx):
     if not has_staff_access(ctx.author):
@@ -511,6 +659,22 @@ async def setup(ctx):
     except discord.HTTPException:
         pass
     await ctx.send(embed=build_verify_embed(ctx.guild), view=build_verify_view())
+
+
+@bot.command(name="vouch")
+async def vouch_panel(ctx):
+    """Staff command: post the vouch panel in the current channel."""
+    if not has_staff_access(ctx.author):
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
+        return
+    try:
+        await ctx.message.delete()
+    except discord.HTTPException:
+        pass
+    await ctx.send(embed=build_vouch_panel_embed(ctx.guild), view=VouchView())
 
 
 @bot.command(name="mute")
