@@ -555,14 +555,13 @@ class ApplicationView(discord.ui.View):
         self.add_item(ApplicationSelect())
 
 
-def build_application_panel_embed(guild: discord.Guild) -> discord.Embed:
+def build_application_panel_embed() -> discord.Embed:
     embed = discord.Embed(
         title="APEX APPLICATION",
         description="Please select a dropdown option below to start your application.",
         color=0x2B2D31,
     )
-    if guild.icon:
-        embed.set_image(url=guild.icon.url)
+    embed.set_image(url="attachment://apex_logo.jpeg")
     return embed
 
 
@@ -879,7 +878,8 @@ async def apply_panel(ctx):
         await ctx.message.delete()
     except discord.HTTPException:
         pass
-    await ctx.send(embed=build_application_panel_embed(ctx.guild), view=ApplicationView())
+    file = discord.File("attached_assets/IMG_6583_1778293042565.jpeg", filename="apex_logo.jpeg")
+    await ctx.send(file=file, embed=build_application_panel_embed(), view=ApplicationView())
 
 
 @bot.command(name="vouch")
