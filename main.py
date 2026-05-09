@@ -30,7 +30,19 @@ spam_tracker: dict[int, dict[str, int]] = {}
 
 vouch_count = 0
 
-APEX_LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "attached_assets", "IMG_6583_1778313104237.jpeg")
+def _find_apex_logo() -> str:
+    candidates = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "attached_assets", "IMG_6583_1778313104237.jpeg"),
+        os.path.join(os.getcwd(), "attached_assets", "IMG_6583_1778313104237.jpeg"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "IMG_6583_1778313104237.jpeg"),
+        os.path.join(os.getcwd(), "IMG_6583_1778313104237.jpeg"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return candidates[0]
+
+APEX_LOGO = _find_apex_logo()
 
 
 def has_staff_access(user: discord.Member) -> bool:
@@ -881,7 +893,12 @@ async def apply_panel(ctx):
     except discord.HTTPException:
         pass
     if not os.path.isfile(APEX_LOGO):
-        await ctx.send("Error: APEX logo file not found. Please check the file path.", delete_after=10)
+        await ctx.send(
+            f"Error: APEX logo file not found.\nSearched: `{APEX_LOGO}`\n"
+            "Make sure `IMG_6583_1778313104237.jpeg` is in the same folder as `bot.py` "
+            "or inside an `attached_assets/` subfolder next to it.",
+            delete_after=20,
+        )
         return
     file = discord.File(APEX_LOGO, filename="apex_logo.jpeg")
     await ctx.send(file=file, embed=build_application_panel_embed(), view=ApplicationView())
