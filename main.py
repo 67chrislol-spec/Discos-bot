@@ -440,6 +440,176 @@ async def send_application_question(user: discord.User, app_data: dict):
         pass
 
 
+def _build_decided_view(decision: str) -> discord.ui.View:
+    colour = discord.ButtonStyle.success if "Accept" in decision else discord.ButtonStyle.danger
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(label=decision, style=colour, disabled=True))
+    return view
+
+
+class AcceptReasonModal(discord.ui.Modal, title="Accept with Reason"):
+    reason = discord.ui.TextInput(
+        label="Reason",
+        placeholder="Enter the reason for acceptance...",
+        style=discord.TextStyle.paragraph,
+        min_length=1,
+        max_length=1000,
+        required=True,
+    )
+
+    def __init__(self, applicant_id: int, app_type: str, app_msg: discord.Message, reviewer: discord.Member):
+        super().__init__()
+        self.applicant_id = applicant_id
+        self.app_type = app_type
+        self.app_msg = app_msg
+        self.reviewer = reviewer
+
+    async def on_submit(self, interaction: discord.Interaction):
+        label = APPLICATION_TYPES.get(self.app_type, {}).get("label", "Application").title()
+        reason_text = self.reason.value.strip()
+        try:
+            applicant = await interaction.client.fetch_user(self.applicant_id)
+            dm_embed = discord.Embed(
+                title="✅  Application Accepted",
+                description=(
+                    f"Your **{label}** application has been **accepted**!\n\n"
+                    f"**Reason:** {reason_text}"
+                ),
+                color=0x57F287,
+                timestamp=datetime.now(timezone.utc),
+            )
+            dm_embed.set_footer(text="APEX Applications")
+            await applicant.send(embed=dm_embed)
+        except Exception:
+            pass
+        try:
+            await self.app_msg.edit(view=_build_decided_view(f"✅ Accepted by {self.reviewer.display_name}"))
+        except Exception:
+            pass
+        await interaction.response.send_message(
+            f"✅ Accepted with reason sent to the applicant.", ephemeral=True
+        )
+
+
+class DenyReasonModal(discord.ui.Modal, title="Deny with Reason"):
+    reason = discord.ui.TextInput(
+        label="Reason",
+        placeholder="Enter the reason for denial...",
+        style=discord.TextStyle.paragraph,
+        min_length=1,
+        max_length=1000,
+        required=True,
+    )
+
+    def __init__(self, applicant_id: int, app_type: str, app_msg: discord.Message, reviewer: discord.Member):
+        super().__init__()
+        self.applicant_id = applicant_id
+        self.app_type = app_type
+        self.app_msg = app_msg
+        self.reviewer = reviewer
+
+    async def on_submit(self, interaction: discord.Interaction):
+        label = APPLICATION_TYPES.get(self.app_type, {}).get("label", "Application").title()
+        reason_text = self.reason.value.strip()
+        try:
+            applicant = await interaction.client.fetch_user(self.applicant_id)
+            dm_embed = discord.Embed(
+                title="❌  Application Denied",
+                description=(
+                    f"Your **{label}** application has been **denied**.\n\n"
+                    f"**Reason:** {reason_text}"
+                ),
+                color=0xED4245,
+                timestamp=datetime.now(timezone.utc),
+            )
+            dm_embed.set_footer(text="APEX Applications")
+            await applicant.send(embed=dm_embed)
+        except Exception:
+            pass
+        try:
+            await self.app_msg.edit(view=_build_decided_view(f"❌ Denied by {self.reviewer.display_name}"))
+        except Exception:
+            pass
+        await interaction.response.send_message(
+            f"❌ Denied with reason sent to the applicant.", ephemeral=True
+        )
+
+
+class ApplicationReviewView(discord.ui.View):
+    def __init__(self, applicant_id: int, app_type: str):
+        super().__init__(timeout=None)
+        self.applicant_id = applicant_id
+        self.app_type = app_type
+
+    async def _check_staff(self, interaction: discord.Interaction) -> bool:
+        if not has_staff_access(interaction.user):
+            await interaction.response.send_message("APEX | Staff permission required.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, row=0)
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._check_staff(interaction):
+            return
+        label = APPLICATION_TYPES.get(self.app_type, {}).get("label", "Application").title()
+        try:
+            applicant = await interaction.client.fetch_user(self.applicant_id)
+            dm_embed = discord.Embed(
+                title="✅  Application Accepted",
+                description=f"Your **{label}** application has been **accepted**! Welcome to the team.",
+                color=0x57F287,
+                timestamp=datetime.now(timezone.utc),
+            )
+            dm_embed.set_footer(text="APEX Applications")
+            await applicant.send(embed=dm_embed)
+        except Exception:
+            pass
+        try:
+            await interaction.message.edit(view=_build_decided_view(f"✅ Accepted by {interaction.user.display_name}"))
+        except Exception:
+            pass
+        await interaction.response.send_message("✅ Applicant has been accepted.", ephemeral=True)
+
+    @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger, row=0)
+    async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._check_staff(interaction):
+            return
+        label = APPLICATION_TYPES.get(self.app_type, {}).get("label", "Application").title()
+        try:
+            applicant = await interaction.client.fetch_user(self.applicant_id)
+            dm_embed = discord.Embed(
+                title="❌  Application Denied",
+                description=f"Your **{label}** application has been **denied**. Thank you for applying.",
+                color=0xED4245,
+                timestamp=datetime.now(timezone.utc),
+            )
+            dm_embed.set_footer(text="APEX Applications")
+            await applicant.send(embed=dm_embed)
+        except Exception:
+            pass
+        try:
+            await interaction.message.edit(view=_build_decided_view(f"❌ Denied by {interaction.user.display_name}"))
+        except Exception:
+            pass
+        await interaction.response.send_message("❌ Applicant has been denied.", ephemeral=True)
+
+    @discord.ui.button(label="Accept with reason", style=discord.ButtonStyle.success, row=1)
+    async def accept_reason(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._check_staff(interaction):
+            return
+        await interaction.response.send_modal(
+            AcceptReasonModal(self.applicant_id, self.app_type, interaction.message, interaction.user)
+        )
+
+    @discord.ui.button(label="Deny with reason", style=discord.ButtonStyle.danger, row=1)
+    async def deny_reason(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._check_staff(interaction):
+            return
+        await interaction.response.send_modal(
+            DenyReasonModal(self.applicant_id, self.app_type, interaction.message, interaction.user)
+        )
+
+
 async def submit_application(user: discord.User, app_data: dict, guild: discord.Guild):
     app_type = app_data["type"]
     questions = APPLICATION_TYPES[app_type]["questions"]
@@ -469,7 +639,7 @@ async def submit_application(user: discord.User, app_data: dict, guild: discord.
 
     if apps_channel:
         try:
-            await apps_channel.send(embed=embed)
+            await apps_channel.send(embed=embed, view=ApplicationReviewView(user.id, app_type))
         except discord.Forbidden:
             pass
 
