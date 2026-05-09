@@ -30,19 +30,6 @@ spam_tracker: dict[int, dict[str, int]] = {}
 
 vouch_count = 0
 
-def _find_apex_logo() -> str:
-    candidates = [
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "attached_assets", "IMG_6583_1778313104237.jpeg"),
-        os.path.join(os.getcwd(), "attached_assets", "IMG_6583_1778313104237.jpeg"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "IMG_6583_1778313104237.jpeg"),
-        os.path.join(os.getcwd(), "IMG_6583_1778313104237.jpeg"),
-    ]
-    for path in candidates:
-        if os.path.isfile(path):
-            return path
-    return candidates[0]
-
-APEX_LOGO = _find_apex_logo()
 
 
 def has_staff_access(user: discord.Member) -> bool:
@@ -569,13 +556,16 @@ class ApplicationView(discord.ui.View):
         self.add_item(ApplicationSelect())
 
 
-def build_application_panel_embed() -> discord.Embed:
+def build_application_panel_embed(guild: discord.Guild = None) -> discord.Embed:
     embed = discord.Embed(
         title="APEX APPLICATION",
         description="Please select a dropdown option below to start your application.",
         color=0x2B2D31,
     )
-    embed.set_image(url="attachment://apex_logo.jpeg")
+    if guild and guild.banner:
+        embed.set_image(url=guild.banner.with_format("jpeg").url)
+    elif guild and guild.icon:
+        embed.set_image(url=guild.icon.with_format("jpeg").url)
     return embed
 
 
@@ -892,16 +882,7 @@ async def apply_panel(ctx):
         await ctx.message.delete()
     except discord.HTTPException:
         pass
-    if not os.path.isfile(APEX_LOGO):
-        await ctx.send(
-            f"Error: APEX logo file not found.\nSearched: `{APEX_LOGO}`\n"
-            "Make sure `IMG_6583_1778313104237.jpeg` is in the same folder as `bot.py` "
-            "or inside an `attached_assets/` subfolder next to it.",
-            delete_after=20,
-        )
-        return
-    file = discord.File(APEX_LOGO, filename="apex_logo.jpeg")
-    await ctx.send(file=file, embed=build_application_panel_embed(), view=ApplicationView())
+    await ctx.send(embed=build_application_panel_embed(ctx.guild), view=ApplicationView())
 
 
 @bot.command(name="vouch")
