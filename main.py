@@ -408,13 +408,6 @@ class VouchModal(discord.ui.Modal, title="Leave a Vouch"):
         max_length=200,
         required=True,
     )
-    customer = discord.ui.TextInput(
-        label="Your username / Discord tag",
-        placeholder="e.g. yourname or @yourname",
-        min_length=1,
-        max_length=100,
-        required=True,
-    )
 
     async def on_submit(self, interaction: discord.Interaction):
         global vouch_count
@@ -447,14 +440,15 @@ class VouchModal(discord.ui.Modal, title="Leave a Vouch"):
         )
         if guild.icon:
             embed.set_author(name=guild.name.upper(), icon_url=guild.icon.url)
-            embed.set_thumbnail(url=guild.icon.url)
         else:
             embed.set_author(name=guild.name.upper())
+
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
 
         embed.add_field(name="Rating", value=stars(rating_int), inline=False)
         embed.add_field(name="Feedback", value=self.feedback.value.strip(), inline=False)
         embed.add_field(name="Items", value=self.items.value.strip(), inline=False)
-        embed.add_field(name="Customer", value=interaction.user.mention, inline=False)
+        embed.add_field(name="Vouched by", value=interaction.user.mention, inline=False)
         embed.set_footer(
             text=f"{guild.name.upper()} | Review #{count_snapshot} | {timestamp_str}",
             icon_url=guild.icon.url if guild.icon else discord.Embed.Empty,
@@ -663,7 +657,6 @@ async def setup(ctx):
 
 @bot.command(name="vouch")
 async def vouch_panel(ctx):
-    """Staff command: post the vouch panel in the current channel."""
     if not has_staff_access(ctx.author):
         try:
             await ctx.message.delete()
