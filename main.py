@@ -382,7 +382,7 @@ async def giveaway_timer(message_id, delay):
 
 def stars(rating: int) -> str:
     rating = max(1, min(5, rating))
-    return "⭐" * rating
+    return "★" * rating + "☆" * (5 - rating)
 
 
 class VouchModal(discord.ui.Modal, title="Leave a Vouch"):
@@ -426,33 +426,29 @@ class VouchModal(discord.ui.Modal, title="Leave a Vouch"):
 
         guild = interaction.guild
         now = datetime.now(timezone.utc)
-        timestamp_str = now.strftime("%-m/%-d/%y, %-I:%M %p")
 
         vouch_channel = discord.utils.find(
             lambda c: "vouch" in c.name.lower(),
             guild.text_channels,
         )
 
+        vouched_at_str = now.strftime("%A, %B %-d, %Y at %-I:%M %p")
+
+        description = (
+            f"**Vouch:**\n{self.feedback.value.strip()}\n\n"
+            f"**Vouch No:** {count_snapshot}\n"
+            f"**Vouched by:** {interaction.user.mention}\n"
+            f"**Vouched at:** {vouched_at_str}\n\n"
+            f"**Rating:** {stars(rating_int)}\n\n"
+            f"{self.items.value.strip()}"
+        )
+
         embed = discord.Embed(
-            title="New Feedback",
-            color=0x5865F2,
-            timestamp=now,
+            title=f"VOUCH #{count_snapshot}",
+            description=description,
+            color=0x2B2D31,
         )
-        if guild.icon:
-            embed.set_author(name=guild.name.upper(), icon_url=guild.icon.url)
-        else:
-            embed.set_author(name=guild.name.upper())
-
-        embed.set_thumbnail(url=interaction.user.display_avatar.url)
-
-        embed.add_field(name="Rating", value=stars(rating_int), inline=False)
-        embed.add_field(name="Feedback", value=self.feedback.value.strip(), inline=False)
-        embed.add_field(name="Items", value=self.items.value.strip(), inline=False)
-        embed.add_field(name="Vouched by", value=interaction.user.mention, inline=False)
-        embed.set_footer(
-            text=f"{guild.name.upper()} | Review #{count_snapshot} | {timestamp_str}",
-            icon_url=guild.icon.url if guild.icon else discord.Embed.Empty,
-        )
+        embed.set_image(url=interaction.user.display_avatar.url)
 
         if vouch_channel:
             try:
