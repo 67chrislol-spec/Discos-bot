@@ -811,7 +811,7 @@ class VouchModal(discord.ui.Modal, title="Leave a Vouch"):
 
         if vouch_channel:
             try:
-                await vouch_channel.send(embed=embed)
+                await vouch_channel.send(embed=embed, view=VouchView())
                 await interaction.response.send_message(
                     "✅ Your vouch has been submitted! Thank you for your feedback.",
                     ephemeral=True,
