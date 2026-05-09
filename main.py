@@ -560,14 +560,12 @@ class ApplicationView(discord.ui.View):
         self.add_item(ApplicationSelect())
 
 
-def build_application_panel_embed(image_url: str = "") -> discord.Embed:
+def build_application_panel_embed() -> discord.Embed:
     embed = discord.Embed(
         title="APEX APPLICATION",
         description="Please select a dropdown option below to start your application.",
         color=0x2B2D31,
     )
-    if image_url:
-        embed.set_image(url=image_url)
     return embed
 
 
@@ -885,21 +883,19 @@ async def apply_panel(ctx):
     except discord.HTTPException:
         pass
 
-    # 1) Prefer a hosted URL (no local file needed)
-    if APEX_LOGO_URL:
-        await ctx.send(embed=build_application_panel_embed(image_url=APEX_LOGO_URL), view=ApplicationView())
-        return
+    # Sending file + embed in ONE call makes Discord render the image ABOVE the embed card.
+    # Do NOT use set_image() — that puts the image inside/below the embed text instead.
 
-    # 2) Fall back to local file sent alongside the embed
+    # 1) Prefer a local file (image appears above the embed card)
     if os.path.isfile(APEX_LOGO):
         try:
             file = discord.File(APEX_LOGO, filename="apex_logo.jpeg")
-            await ctx.send(file=file, embed=build_application_panel_embed(image_url="attachment://apex_logo.jpeg"), view=ApplicationView())
+            await ctx.send(file=file, embed=build_application_panel_embed(), view=ApplicationView())
             return
         except (discord.Forbidden, discord.HTTPException, OSError):
             pass
 
-    # 3) No image available — send embed only
+    # 2) No image available — send embed only
     await ctx.send(embed=build_application_panel_embed(), view=ApplicationView())
 
 
