@@ -30,6 +30,8 @@ spam_tracker: dict[int, dict[str, int]] = {}
 
 vouch_count = 0
 
+APEX_LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "attached_assets", "IMG_6583_1778293042565.jpeg")
+
 
 def has_staff_access(user: discord.Member) -> bool:
     if user.guild_permissions.administrator:
@@ -878,7 +880,7 @@ async def apply_panel(ctx):
         await ctx.message.delete()
     except discord.HTTPException:
         pass
-    file = discord.File("attached_assets/IMG_6583_1778293042565.jpeg", filename="apex_logo.jpeg")
+    file = discord.File(APEX_LOGO, filename="apex_logo.jpeg")
     await ctx.send(file=file, embed=build_application_panel_embed(), view=ApplicationView())
 
 
