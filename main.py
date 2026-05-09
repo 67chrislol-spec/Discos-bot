@@ -447,12 +447,7 @@ async def submit_application(user: discord.User, app_data: dict, guild: discord.
     label = APPLICATION_TYPES[app_type]["label"].title()
 
     apps_channel = discord.utils.find(
-        lambda c: (
-            "application" in c.name.lower()
-            or "app-log" in c.name.lower()
-            or "staff-app" in c.name.lower()
-            or "apps" in c.name.lower()
-        ),
+        lambda c: c.name.lower() == "applications",
         guild.text_channels,
     )
 
@@ -504,7 +499,7 @@ class ApplicationSelect(discord.ui.Select):
             for key, data in APPLICATION_TYPES.items()
         ]
         super().__init__(
-            placeholder="Please select a ticket based on your request.",
+            placeholder="Make a selection",
             options=options,
             custom_id="application_select",
         )
@@ -559,7 +554,7 @@ class ApplicationView(discord.ui.View):
 def build_application_panel_embed(guild: discord.Guild = None) -> discord.Embed:
     embed = discord.Embed(
         title="APEX APPLICATION",
-        description="Please select a dropdown option below to start your application.",
+        description="Submit your application to be considered for a role on the team—please only apply if you are active, reliable, and serious.",
         color=0x2B2D31,
     )
     if guild and guild.banner:
