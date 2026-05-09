@@ -557,13 +557,14 @@ class ApplicationView(discord.ui.View):
         self.add_item(ApplicationSelect())
 
 
-def build_application_panel_embed() -> discord.Embed:
+def build_application_panel_embed(with_image: bool = True) -> discord.Embed:
     embed = discord.Embed(
         title="APEX APPLICATION",
         description="Please select a dropdown option below to start your application.",
         color=0x2B2D31,
     )
-    embed.set_image(url="attachment://apex_logo.jpeg")
+    if with_image:
+        embed.set_image(url="attachment://apex_logo.jpeg")
     return embed
 
 
@@ -880,8 +881,19 @@ async def apply_panel(ctx):
         await ctx.message.delete()
     except discord.HTTPException:
         pass
-    file = discord.File(APEX_LOGO, filename="apex_logo.jpeg")
-    await ctx.send(file=file, embed=build_application_panel_embed(), view=ApplicationView())
+
+    # Try to send with the logo image attached; fall back gracefully if the file is missing
+    logo_path = APEX_LOGO
+    if os.path.isfile(logo_path):
+        try:
+            file = discord.File(logo_path, filename="apex_logo.jpeg")
+            await ctx.send(file=file, embed=build_application_panel_embed(with_image=True), view=ApplicationView())
+            return
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    # No logo file found — send the panel without the image so it still works
+    await ctx.send(embed=build_application_panel_embed(with_image=False), view=ApplicationView())
 
 
 @bot.command(name="vouch")
