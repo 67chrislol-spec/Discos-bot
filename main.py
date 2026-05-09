@@ -377,6 +377,196 @@ async def giveaway_timer(message_id, delay):
 
 
 # ─────────────────────────────────────────────
+#  APPLICATION SYSTEM
+# ─────────────────────────────────────────────
+
+active_applications: dict[int, dict] = {}
+
+STAFF_QUESTIONS = [
+    "Why do you want to be staff here?",
+    "Do you have any past experience with support?",
+    "What do you understand about Rocket League bots or automation tools?",
+    'If a customer says the bot is "not working," what exact steps would you take to troubleshoot it?',
+    "A user says the product got them banned (even if it didn't). How do you respond?",
+    "What would you do if someone is confused about installation or configuration?",
+    "How would you deal with someone asking for free access?",
+    "Why do you think you're fit to support a technical gaming product like this?",
+]
+
+MODERATOR_QUESTIONS = [
+    "Why do you want to be a moderator?",
+    "How would you handle someone breaking rules after being warned?",
+    "Have you ever moderated a Discord server before? If so, describe your experience.",
+    "How would you handle a situation where two members are in a heated argument?",
+    "What would you do if you suspected a member was evading a ban?",
+    "How do you stay calm and professional when dealing with difficult members?",
+    "Why do you think you're a good fit for the moderator role in this community?",
+]
+
+APPLICATION_TYPES = {
+    "staff": {
+        "label": "STAFF",
+        "description": "Staff application",
+        "emoji": "🎫",
+        "questions": STAFF_QUESTIONS,
+    },
+    "moderator": {
+        "label": "MODERATOR",
+        "description": "Moderator application",
+        "emoji": "🛡️",
+        "questions": MODERATOR_QUESTIONS,
+    },
+}
+
+
+async def send_application_question(user: discord.User, app_data: dict):
+    app_type = app_data["type"]
+    questions = APPLICATION_TYPES[app_type]["questions"]
+    idx = app_data["question_idx"]
+    total = len(questions)
+    question = questions[idx]
+    label = APPLICATION_TYPES[app_type]["label"].title()
+
+    embed = discord.Embed(color=0x5865F2)
+    embed.set_author(name=label)
+    embed.description = (
+        f"**{idx + 1}/{total}. {question}**\n\n"
+        "*To answer this question, please send a message to the bot with your response.*"
+    )
+    try:
+        await user.send(embed=embed)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+
+async def submit_application(user: discord.User, app_data: dict, guild: discord.Guild):
+    app_type = app_data["type"]
+    questions = APPLICATION_TYPES[app_type]["questions"]
+    answers = app_data["answers"]
+    label = APPLICATION_TYPES[app_type]["label"].title()
+
+    apps_channel = discord.utils.find(
+        lambda c: (
+            "application" in c.name.lower()
+            or "app-log" in c.name.lower()
+            or "staff-app" in c.name.lower()
+            or "apps" in c.name.lower()
+        ),
+        guild.text_channels,
+    )
+
+    now = datetime.now(timezone.utc)
+    embed = discord.Embed(
+        title=f"New {label} Application",
+        color=0x5865F2,
+        timestamp=now,
+    )
+    embed.set_author(name=f"{user.display_name} ({user.name})", icon_url=user.display_avatar.url)
+    embed.set_thumbnail(url=user.display_avatar.url)
+    embed.add_field(name="Applicant", value=f"{user.mention}\n`{user.name}`\n`ID: {user.id}`", inline=False)
+
+    for i, (q, a) in enumerate(zip(questions, answers), 1):
+        answer_text = a if len(a) <= 1024 else a[:1021] + "..."
+        embed.add_field(name=f"Q{i}. {q}", value=answer_text or "*No answer*", inline=False)
+
+    embed.set_footer(text=f"Applied for: {label}  •  {now.strftime('%B %-d, %Y at %-I:%M %p UTC')}")
+
+    if apps_channel:
+        try:
+            await apps_channel.send(embed=embed)
+        except discord.Forbidden:
+            pass
+
+    confirm_embed = discord.Embed(
+        title="Application submitted.",
+        description=(
+            "Your application has been submitted.\n\n"
+            "Your answers are being reviewed by our staff team. We'll get back to you soon!"
+        ),
+        color=0x57F287,
+    )
+    try:
+        await user.send(embed=confirm_embed)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+
+class ApplicationSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(
+                label=data["label"],
+                description=data["description"],
+                emoji=data["emoji"],
+                value=key,
+            )
+            for key, data in APPLICATION_TYPES.items()
+        ]
+        super().__init__(
+            placeholder="Please select a ticket based on your request.",
+            options=options,
+            custom_id="application_select",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        user = interaction.user
+        app_type = self.values[0]
+
+        if user.id in active_applications:
+            await interaction.response.send_message(
+                "You already have an active application in your DMs. Please complete it first.",
+                ephemeral=True,
+            )
+            return
+
+        active_applications[user.id] = {
+            "type": app_type,
+            "question_idx": 0,
+            "answers": [],
+            "guild_id": interaction.guild_id,
+        }
+
+        label = APPLICATION_TYPES[app_type]["label"].title()
+
+        start_embed = discord.Embed(
+            title="Application Started",
+            description="Please answer the questions below by sending a message to the bot.",
+            color=0x57F287,
+        )
+
+        try:
+            await user.send(embed=start_embed)
+            await send_application_question(user, active_applications[user.id])
+            await interaction.response.send_message(
+                f"Your **{label}** application has started! Check your DMs.",
+                ephemeral=True,
+            )
+        except discord.Forbidden:
+            active_applications.pop(user.id, None)
+            await interaction.response.send_message(
+                "I couldn't DM you. Please enable DMs from server members and try again.",
+                ephemeral=True,
+            )
+
+
+class ApplicationView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(ApplicationSelect())
+
+
+def build_application_panel_embed(guild: discord.Guild) -> discord.Embed:
+    embed = discord.Embed(
+        title="APEX APPLICATION",
+        description="Please select a dropdown option below to start your application.",
+        color=0x2B2D31,
+    )
+    if guild.icon:
+        embed.set_image(url=guild.icon.url)
+    return embed
+
+
+# ─────────────────────────────────────────────
 #  VOUCH SYSTEM
 # ─────────────────────────────────────────────
 
@@ -426,6 +616,7 @@ class VouchModal(discord.ui.Modal, title="Leave a Vouch"):
 
         guild = interaction.guild
         now = datetime.now(timezone.utc)
+        timestamp_str = now.strftime("%-m/%-d/%y, %-I:%M %p")
 
         vouch_channel = discord.utils.find(
             lambda c: "vouch" in c.name.lower(),
@@ -511,6 +702,7 @@ def build_vouch_panel_embed(guild: discord.Guild) -> discord.Embed:
 async def on_ready():
     print("Logged in as " + str(bot.user))
     bot.add_view(VouchView())
+    bot.add_view(ApplicationView())
     for guild in bot.guilds:
         await ensure_verify_embed(guild)
     try:
@@ -526,6 +718,30 @@ async def on_message(message: discord.Message):
         await bot.process_commands(message)
         return
     if message.guild is None:
+        if message.author.id in active_applications:
+            app_data = active_applications[message.author.id]
+            app_type = app_data["type"]
+            questions = APPLICATION_TYPES[app_type]["questions"]
+            app_data["answers"].append(message.content.strip())
+            app_data["question_idx"] += 1
+            if app_data["question_idx"] >= len(questions):
+                guild = bot.get_guild(app_data["guild_id"])
+                active_applications.pop(message.author.id, None)
+                if guild:
+                    await submit_application(message.author, app_data, guild)
+                else:
+                    confirm_embed = discord.Embed(
+                        title="Application submitted.",
+                        description="Your application has been submitted.",
+                        color=0x57F287,
+                    )
+                    try:
+                        await message.author.send(embed=confirm_embed)
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+            else:
+                await send_application_question(message.author, app_data)
+            return
         await bot.process_commands(message)
         return
     member = message.guild.get_member(message.author.id)
@@ -651,8 +867,24 @@ async def setup(ctx):
     await ctx.send(embed=build_verify_embed(ctx.guild), view=build_verify_view())
 
 
+@bot.command(name="apply")
+async def apply_panel(ctx):
+    if not has_staff_access(ctx.author):
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
+        return
+    try:
+        await ctx.message.delete()
+    except discord.HTTPException:
+        pass
+    await ctx.send(embed=build_application_panel_embed(ctx.guild), view=ApplicationView())
+
+
 @bot.command(name="vouch")
 async def vouch_panel(ctx):
+    """Staff command: post the vouch panel in the current channel."""
     if not has_staff_access(ctx.author):
         try:
             await ctx.message.delete()
