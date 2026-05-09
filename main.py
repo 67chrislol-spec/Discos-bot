@@ -30,6 +30,9 @@ spam_tracker: dict[int, dict[str, int]] = {}
 
 vouch_count = 0
 
+# URL-based image (set APEX_LOGO_URL env var to a public image URL — most reliable)
+APEX_LOGO_URL = os.environ.get("APEX_LOGO_URL", "")
+# Local file fallback (place the image next to bot.py in an attached_assets folder)
 APEX_LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "attached_assets", "IMG_6583_1778295681664.jpeg")
 
 
@@ -557,14 +560,14 @@ class ApplicationView(discord.ui.View):
         self.add_item(ApplicationSelect())
 
 
-def build_application_panel_embed(with_image: bool = False) -> discord.Embed:
+def build_application_panel_embed(image_url: str = "") -> discord.Embed:
     embed = discord.Embed(
         title="APEX APPLICATION",
         description="Please select a dropdown option below to start your application.",
         color=0x2B2D31,
     )
-    if with_image:
-        embed.set_image(url="attachment://apex_logo.jpeg")
+    if image_url:
+        embed.set_image(url=image_url)
     return embed
 
 
@@ -882,18 +885,22 @@ async def apply_panel(ctx):
     except discord.HTTPException:
         pass
 
-    # Send the logo and embed together in one message so the image renders inside the embed.
-    # Fall back to just the embed if the file is missing.
-    logo_path = APEX_LOGO
-    if os.path.isfile(logo_path):
+    # 1) Prefer a hosted URL (no local file needed)
+    if APEX_LOGO_URL:
+        await ctx.send(embed=build_application_panel_embed(image_url=APEX_LOGO_URL), view=ApplicationView())
+        return
+
+    # 2) Fall back to local file sent alongside the embed
+    if os.path.isfile(APEX_LOGO):
         try:
-            file = discord.File(logo_path, filename="apex_logo.jpeg")
-            await ctx.send(file=file, embed=build_application_panel_embed(with_image=True), view=ApplicationView())
+            file = discord.File(APEX_LOGO, filename="apex_logo.jpeg")
+            await ctx.send(file=file, embed=build_application_panel_embed(image_url="attachment://apex_logo.jpeg"), view=ApplicationView())
             return
         except (discord.Forbidden, discord.HTTPException, OSError):
             pass
 
-    await ctx.send(embed=build_application_panel_embed(with_image=False), view=ApplicationView())
+    # 3) No image available — send embed only
+    await ctx.send(embed=build_application_panel_embed(), view=ApplicationView())
 
 
 @bot.command(name="vouch")
