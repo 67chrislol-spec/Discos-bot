@@ -30,7 +30,7 @@ spam_tracker: dict[int, dict[str, int]] = {}
 
 vouch_count = 0
 
-APEX_LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "attached_assets", "IMG_6583_1778293042565.jpeg")
+APEX_LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "attached_assets", "IMG_6583_1778295681664.jpeg")
 
 
 def has_staff_access(user: discord.Member) -> bool:
