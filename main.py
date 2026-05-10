@@ -2,6 +2,7 @@ import os
 import re
 import random
 import asyncio
+import sqlite3
 from datetime import datetime, timezone, timedelta
 import discord
 from discord.ext import commands
@@ -31,23 +32,107 @@ spam_tracker: dict[int, dict[str, int]] = {}
 vouch_count = 0
 
 # ─────────────────────────────────────────────
-#  INVITE TRACKING
+#  DATABASE — persistent invite storage
+# ─────────────────────────────────────────────
+
+DB_PATH = os.environ.get("DB_PATH", "apex_invites.db")
+
+
+def _get_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def db_init():
+    with _get_conn() as conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS user_invites (
+                user_id     INTEGER PRIMARY KEY,
+                invite_code TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS invite_owners (
+                invite_code TEXT PRIMARY KEY,
+                user_id     INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS member_joined_via (
+                member_id   INTEGER PRIMARY KEY,
+                invite_code TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS valid_invite_counts (
+                invite_code TEXT PRIMARY KEY,
+                count       INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+
+
+def db_get_user_invite(user_id: int) -> str | None:
+    with _get_conn() as conn:
+        row = conn.execute("SELECT invite_code FROM user_invites WHERE user_id = ?", (user_id,)).fetchone()
+        return row["invite_code"] if row else None
+
+
+def db_set_user_invite(user_id: int, invite_code: str):
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO user_invites (user_id, invite_code) VALUES (?, ?)",
+            (user_id, invite_code),
+        )
+
+
+def db_get_invite_owner(invite_code: str) -> int | None:
+    with _get_conn() as conn:
+        row = conn.execute("SELECT user_id FROM invite_owners WHERE invite_code = ?", (invite_code,)).fetchone()
+        return row["user_id"] if row else None
+
+
+def db_set_invite_owner(invite_code: str, user_id: int):
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO invite_owners (invite_code, user_id) VALUES (?, ?)",
+            (invite_code, user_id),
+        )
+
+
+def db_get_joined_via(member_id: int) -> str | None:
+    with _get_conn() as conn:
+        row = conn.execute("SELECT invite_code FROM member_joined_via WHERE member_id = ?", (member_id,)).fetchone()
+        return row["invite_code"] if row else None
+
+
+def db_set_joined_via(member_id: int, invite_code: str):
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO member_joined_via (member_id, invite_code) VALUES (?, ?)",
+            (member_id, invite_code),
+        )
+
+
+def db_get_valid_count(invite_code: str) -> int:
+    with _get_conn() as conn:
+        row = conn.execute("SELECT count FROM valid_invite_counts WHERE invite_code = ?", (invite_code,)).fetchone()
+        return row["count"] if row else 0
+
+
+def db_increment_valid_count(invite_code: str, delta: int = 1):
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO valid_invite_counts (invite_code, count) VALUES (?, ?)
+            ON CONFLICT(invite_code) DO UPDATE SET count = MAX(0, count + excluded.count)
+            """,
+            (invite_code, delta),
+        )
+
+
+db_init()
+
+# ─────────────────────────────────────────────
+#  INVITE TRACKING (runtime cache only)
 # ─────────────────────────────────────────────
 
 # guild_id → {invite_code: use_count}  — snapshot taken on ready / after each join
 invite_uses_cache: dict[int, dict[str, int]] = {}
-
-# user_id → invite_code they own (their personal invite)
-user_invite_map: dict[int, str] = {}
-
-# invite_code → inviter user_id
-invite_owner_map: dict[str, int] = {}
-
-# member_id → invite_code they joined with
-member_joined_via: dict[int, str] = {}
-
-# invite_code → count of VALID (verified, still in server) invites
-valid_invite_counts: dict[str, int] = {}
 
 INVITE_TIERS = [
     (20,  "3-Day Key"),
@@ -100,15 +185,15 @@ class InviteView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="🔗 Create / Check Invite",
-        style=discord.ButtonStyle.blurple,
+        label="✅ Create / Check Invite",
+        style=discord.ButtonStyle.success,
         custom_id="invite_create_check",
     )
     async def create_check_invite(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True, thinking=True)
         guild = interaction.guild
         user = interaction.user
-        existing_code = user_invite_map.get(user.id)
+        existing_code = db_get_user_invite(user.id)
 
         invite = None
 
@@ -133,10 +218,8 @@ class InviteView(discord.ui.View):
                     unique=True,
                     reason=f"Personal invite for {user.display_name} ({user.id})",
                 )
-                user_invite_map[user.id] = invite.code
-                invite_owner_map[invite.code] = user.id
-                if invite.code not in valid_invite_counts:
-                    valid_invite_counts[invite.code] = 0
+                db_set_user_invite(user.id, invite.code)
+                db_set_invite_owner(invite.code, user.id)
                 if guild.id in invite_uses_cache:
                     invite_uses_cache[guild.id][invite.code] = invite.uses
             except discord.Forbidden:
@@ -149,12 +232,10 @@ class InviteView(discord.ui.View):
                 await interaction.followup.send(f"❌ Failed to create invite: {e}", ephemeral=True)
                 return
         else:
-            user_invite_map[user.id] = invite.code
-            invite_owner_map[invite.code] = user.id
-            if invite.code not in valid_invite_counts:
-                valid_invite_counts[invite.code] = 0
+            db_set_user_invite(user.id, invite.code)
+            db_set_invite_owner(invite.code, user.id)
 
-        valid = valid_invite_counts.get(invite.code, 0)
+        valid = db_get_valid_count(invite.code)
         next_threshold, next_key = get_next_tier(valid)
         needed = next_threshold - valid
 
@@ -204,14 +285,14 @@ class InviteView(discord.ui.View):
 
     @discord.ui.button(
         label="🎫 Request Key",
-        style=discord.ButtonStyle.success,
+        style=discord.ButtonStyle.secondary,
         custom_id="invite_request_key",
     )
     async def request_key(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True, thinking=True)
         user = interaction.user
-        code = user_invite_map.get(user.id)
-        valid = valid_invite_counts.get(code, 0) if code else 0
+        code = db_get_user_invite(user.id)
+        valid = db_get_valid_count(code) if code else 0
 
         qualified_tier = None
         for threshold, label in INVITE_TIERS:
@@ -1112,7 +1193,7 @@ async def on_member_join(member: discord.Member):
     invite_uses_cache[guild.id] = new_cache
 
     if used_code:
-        member_joined_via[member.id] = used_code
+        db_set_joined_via(member.id, used_code)
 
     # --- Unverified role ---
     unverified_role = discord.utils.find(lambda r: r.name.strip().lower() == "unverified", guild.roles)
@@ -1145,21 +1226,19 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     has_role = any(r.name.strip().lower() == member_role_name for r in after.roles)
 
     if not had_role and has_role:
-        code = member_joined_via.get(after.id)
-        if code and code in invite_owner_map:
-            if code not in valid_invite_counts:
-                valid_invite_counts[code] = 0
-            valid_invite_counts[code] += 1
+        code = db_get_joined_via(after.id)
+        if code and db_get_invite_owner(code) is not None:
+            db_increment_valid_count(code, 1)
 
 
 @bot.event
 async def on_member_remove(member: discord.Member):
-    code = member_joined_via.get(member.id)
-    if code and code in invite_owner_map:
+    code = db_get_joined_via(member.id)
+    if code and db_get_invite_owner(code) is not None:
         member_role_name = "apex | member"
         was_verified = any(r.name.strip().lower() == member_role_name for r in member.roles)
-        if was_verified and code in valid_invite_counts and valid_invite_counts[code] > 0:
-            valid_invite_counts[code] -= 1
+        if was_verified:
+            db_increment_valid_count(code, -1)
 
     invite_uses_cache[member.guild.id] = await snapshot_invites(member.guild)
 
