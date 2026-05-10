@@ -30,6 +30,219 @@ spam_tracker: dict[int, dict[str, int]] = {}
 
 vouch_count = 0
 
+# ─────────────────────────────────────────────
+#  INVITE TRACKING
+# ─────────────────────────────────────────────
+
+# guild_id → {invite_code: use_count}  — snapshot taken on ready / after each join
+invite_uses_cache: dict[int, dict[str, int]] = {}
+
+# user_id → invite_code they own (their personal invite)
+user_invite_map: dict[int, str] = {}
+
+# invite_code → inviter user_id
+invite_owner_map: dict[str, int] = {}
+
+# member_id → invite_code they joined with
+member_joined_via: dict[int, str] = {}
+
+# invite_code → count of VALID (verified, still in server) invites
+valid_invite_counts: dict[str, int] = {}
+
+INVITE_TIERS = [
+    (20,  "3-Day Key"),
+    (40,  "1-Week Key"),
+    (75,  "2-Week Key"),
+    (110, "1-Month Key"),
+]
+
+
+def get_next_tier(valid: int) -> tuple[int, str]:
+    for threshold, label in INVITE_TIERS:
+        if valid < threshold:
+            return threshold, label
+    return INVITE_TIERS[-1]
+
+
+async def snapshot_invites(guild: discord.Guild) -> dict[str, int]:
+    try:
+        invites = await guild.invites()
+        return {inv.code: inv.uses for inv in invites}
+    except discord.Forbidden:
+        return {}
+
+
+def build_invite_panel_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="🎁 GET A KEY — Bring new members → get keys!",
+        color=0xFAA61A,
+    )
+    tiers_text = "\n".join(f"▸ **{t} invites** = **{k}**" for t, k in INVITE_TIERS)
+    embed.description = (
+        f"{tiers_text}\n\n"
+        "Only invites where the person gets **verified** count.\n"
+        "Create or check your personal invite with the button below.\n\n"
+        "**💡 How It Works**\n"
+        "1. Make TikTok / YouTube videos **promoting APEX**\n"
+        "2. Share your invite link in those videos\n"
+        "3. When they join and get **verified**, the invite counts\n"
+        "4. With enough invites you can click **Request Key**\n\n"
+        "⚠️ Only invites from **real promotion** count. J4J, fake invites, or invites "
+        "without directly promoting APEX will be removed.\n"
+        "🧹 Invite links with no activity are automatically cleaned up to keep things tidy.\n\n"
+        "**Only verified members count as valid invites.**"
+    )
+    return embed
+
+
+class InviteView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="🔗 Create / Check Invite",
+        style=discord.ButtonStyle.blurple,
+        custom_id="invite_create_check",
+    )
+    async def create_check_invite(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        guild = interaction.guild
+        user = interaction.user
+        existing_code = user_invite_map.get(user.id)
+
+        invite = None
+
+        if existing_code:
+            try:
+                guild_invites = await guild.invites()
+                invite = next((inv for inv in guild_invites if inv.code == existing_code), None)
+            except discord.Forbidden:
+                pass
+
+        if invite is None:
+            free_keys_channel = discord.utils.find(
+                lambda c: "free-key" in c.name.lower() or "free_key" in c.name.lower(),
+                guild.text_channels,
+            )
+            target_channel = free_keys_channel or interaction.channel
+
+            try:
+                invite = await target_channel.create_invite(
+                    max_age=0,
+                    max_uses=0,
+                    unique=True,
+                    reason=f"Personal invite for {user.display_name} ({user.id})",
+                )
+                user_invite_map[user.id] = invite.code
+                invite_owner_map[invite.code] = user.id
+                if invite.code not in valid_invite_counts:
+                    valid_invite_counts[invite.code] = 0
+                if guild.id in invite_uses_cache:
+                    invite_uses_cache[guild.id][invite.code] = invite.uses
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "❌ I don't have permission to create invites. Please contact staff.",
+                    ephemeral=True,
+                )
+                return
+            except discord.HTTPException as e:
+                await interaction.followup.send(f"❌ Failed to create invite: {e}", ephemeral=True)
+                return
+        else:
+            user_invite_map[user.id] = invite.code
+            invite_owner_map[invite.code] = user.id
+            if invite.code not in valid_invite_counts:
+                valid_invite_counts[invite.code] = 0
+
+        valid = valid_invite_counts.get(invite.code, 0)
+        next_threshold, next_key = get_next_tier(valid)
+        needed = next_threshold - valid
+
+        embed = discord.Embed(color=0x5865F2)
+        embed.add_field(
+            name="🔗 Your Invite Links",
+            value=(
+                f"Share one of these links to invite people:\n"
+                f"**Discord:** https://discord.gg/{invite.code}"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="📊 Your Stats",
+            value=(
+                f"**Valid Invites:** {valid} / {next_threshold}\n"
+                f"**Next Key:** {next_key}"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="💡 Tip",
+            value=f"You need **{needed} more** valid invites for a {next_key}!",
+            inline=False,
+        )
+        embed.add_field(
+            name="💡 How It Works",
+            value=(
+                "1. Make TikTok / YouTube videos **promoting APEX**\n"
+                "2. Share your invite link in those videos\n"
+                "3. When they join and get **verified**, the invite counts\n"
+                "4. With enough invites you can click **Request Key**"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="\u200b",
+            value=(
+                "⚠️ Only invites from **real promotion** count. J4J or fake invites will be removed.\n"
+                "Only invites where the person gets verified count.\n"
+                "⚠️ Members who left the server are not counted."
+            ),
+            inline=False,
+        )
+        embed.set_footer(text="Only you can see this • Dismiss message")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @discord.ui.button(
+        label="🎫 Request Key",
+        style=discord.ButtonStyle.success,
+        custom_id="invite_request_key",
+    )
+    async def request_key(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        user = interaction.user
+        code = user_invite_map.get(user.id)
+        valid = valid_invite_counts.get(code, 0) if code else 0
+
+        qualified_tier = None
+        for threshold, label in INVITE_TIERS:
+            if valid >= threshold:
+                qualified_tier = label
+
+        if qualified_tier is None:
+            next_threshold, next_key = get_next_tier(valid)
+            needed = next_threshold - valid
+            await interaction.followup.send(
+                f"❌ You don't have enough valid invites yet.\n"
+                f"You need **{needed} more** valid invite(s) for a **{next_key}**.",
+                ephemeral=True,
+            )
+            return
+
+        tickets_channel = discord.utils.find(
+            lambda c: "ticket" in c.name.lower(), interaction.guild.text_channels
+        )
+        if tickets_channel:
+            await interaction.followup.send(
+                f"✅ You qualify for a **{qualified_tier}** with **{valid} valid invites**!\n"
+                f"Please open a ticket in {tickets_channel.mention} and a staff member will provide your key.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                f"✅ You qualify for a **{qualified_tier}** with **{valid} valid invites**!\n"
+                "Please contact staff to claim your key.",
+                ephemeral=True,
+            )
 
 
 def has_staff_access(user: discord.Member) -> bool:
@@ -871,13 +1084,96 @@ async def on_ready():
     print("Logged in as " + str(bot.user))
     bot.add_view(VouchView())
     bot.add_view(ApplicationView())
+    bot.add_view(InviteView())
     for guild in bot.guilds:
         await ensure_verify_embed(guild)
+        invite_uses_cache[guild.id] = await snapshot_invites(guild)
     try:
         synced = await bot.tree.sync()
         print("[on_ready] synced " + str(len(synced)) + " slash commands")
     except Exception as e:
         print("[on_ready] failed to sync: " + str(e))
+
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    guild = member.guild
+
+    # --- Invite tracking ---
+    old_cache = invite_uses_cache.get(guild.id, {})
+    new_cache = await snapshot_invites(guild)
+
+    used_code = None
+    for code, uses in new_cache.items():
+        if uses > old_cache.get(code, 0):
+            used_code = code
+            break
+
+    invite_uses_cache[guild.id] = new_cache
+
+    if used_code:
+        member_joined_via[member.id] = used_code
+
+    # --- Unverified role ---
+    unverified_role = discord.utils.find(lambda r: r.name.strip().lower() == "unverified", guild.roles)
+    if unverified_role:
+        try:
+            await member.add_roles(unverified_role)
+        except discord.Forbidden:
+            pass
+
+    # --- Welcome message ---
+    welcome_channel = discord.utils.find(lambda c: "welcome" in c.name.lower(), guild.text_channels)
+    if welcome_channel:
+        count = guild.member_count
+        suffix = "th" if 10 <= count % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(count % 10, "th")
+        embed = discord.Embed(
+            description=f"Welcome {member.display_name} to **APEX** - you are the {count}{suffix} member!",
+            color=discord.Color.from_rgb(255, 90, 30),
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        try:
+            await welcome_channel.send(content=f"Welcome {member.mention} to **APEX**! You are the {count}{suffix} member!", embed=embed)
+        except discord.Forbidden:
+            pass
+
+
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    member_role_name = "apex | member"
+    had_role = any(r.name.strip().lower() == member_role_name for r in before.roles)
+    has_role = any(r.name.strip().lower() == member_role_name for r in after.roles)
+
+    if not had_role and has_role:
+        code = member_joined_via.get(after.id)
+        if code and code in invite_owner_map:
+            if code not in valid_invite_counts:
+                valid_invite_counts[code] = 0
+            valid_invite_counts[code] += 1
+
+
+@bot.event
+async def on_member_remove(member: discord.Member):
+    code = member_joined_via.get(member.id)
+    if code and code in invite_owner_map:
+        member_role_name = "apex | member"
+        was_verified = any(r.name.strip().lower() == member_role_name for r in member.roles)
+        if was_verified and code in valid_invite_counts and valid_invite_counts[code] > 0:
+            valid_invite_counts[code] -= 1
+
+    invite_uses_cache[member.guild.id] = await snapshot_invites(member.guild)
+
+
+@bot.event
+async def on_invite_create(invite: discord.Invite):
+    if invite.guild:
+        invite_uses_cache.setdefault(invite.guild.id, {})[invite.code] = invite.uses
+
+
+@bot.event
+async def on_invite_delete(invite: discord.Invite):
+    if invite.guild and invite.guild.id in invite_uses_cache:
+        invite_uses_cache[invite.guild.id].pop(invite.code, None)
 
 
 @bot.event
@@ -993,29 +1289,6 @@ async def on_raw_message_delete(payload):
     await ensure_verify_embed(guild)
 
 
-@bot.event
-async def on_member_join(member):
-    unverified_role = discord.utils.find(lambda r: r.name.strip().lower() == "unverified", member.guild.roles)
-    if unverified_role:
-        try:
-            await member.add_roles(unverified_role)
-        except discord.Forbidden:
-            pass
-    welcome_channel = discord.utils.find(lambda c: "welcome" in c.name.lower(), member.guild.text_channels)
-    if welcome_channel:
-        count = member.guild.member_count
-        suffix = "th" if 10 <= count % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(count % 10, "th")
-        embed = discord.Embed(
-            description=f"Welcome {member.display_name} to **APEX** - you are the {count}{suffix} member!",
-            color=discord.Color.from_rgb(255, 90, 30),
-        )
-        embed.set_thumbnail(url=member.display_avatar.url)
-        try:
-            await welcome_channel.send(content=f"Welcome {member.mention} to **APEX**! You are the {count}{suffix} member!", embed=embed)
-        except discord.Forbidden:
-            pass
-
-
 # ─────────────────────────────────────────────
 #  COMMANDS
 # ─────────────────────────────────────────────
@@ -1033,6 +1306,22 @@ async def setup(ctx):
     except discord.HTTPException:
         pass
     await ctx.send(embed=build_verify_embed(ctx.guild), view=build_verify_view())
+
+
+@bot.command(name="invitesetup")
+async def invite_setup(ctx):
+    """Staff command: post the invite panel in the current channel."""
+    if not has_staff_access(ctx.author):
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
+        return
+    try:
+        await ctx.message.delete()
+    except discord.HTTPException:
+        pass
+    await ctx.send(embed=build_invite_panel_embed(), view=InviteView())
 
 
 @bot.command(name="apply")
