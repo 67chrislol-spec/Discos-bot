@@ -284,6 +284,69 @@ class InviteView(discord.ui.View):
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @discord.ui.button(
+        label="📋 Check Invites",
+        style=discord.ButtonStyle.primary,
+        custom_id="invite_check_count",
+    )
+    async def check_invites(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        user = interaction.user
+        code = db_get_user_invite(user.id)
+
+        if not code:
+            await interaction.followup.send(
+                "❌ You don't have a personal invite link yet.\n"
+                "Click **✅ Create / Check Invite** to create one first!",
+                ephemeral=True,
+            )
+            return
+
+        valid = db_get_valid_count(code)
+        next_threshold, next_key = get_next_tier(valid)
+        needed = next_threshold - valid
+
+        qualified_tier = None
+        for threshold, label in INVITE_TIERS:
+            if valid >= threshold:
+                qualified_tier = label
+
+        embed = discord.Embed(
+            title="📋 Your Invite Stats",
+            color=0x5865F2,
+        )
+        embed.add_field(
+            name="👥 Total Valid Invites",
+            value=f"**{valid}** verified member(s) joined using your link",
+            inline=False,
+        )
+        embed.add_field(
+            name="🔗 Your Invite Link",
+            value=f"https://discord.gg/{code}",
+            inline=False,
+        )
+
+        if qualified_tier:
+            embed.add_field(
+                name="✅ You Qualify For",
+                value=f"**{qualified_tier}** — click **🎫 Request Key** to claim it!",
+                inline=False,
+            )
+        else:
+            progress_bar_filled = int((valid / next_threshold) * 10)
+            progress_bar = "█" * progress_bar_filled + "░" * (10 - progress_bar_filled)
+            embed.add_field(
+                name="📊 Progress to Next Key",
+                value=(
+                    f"`{progress_bar}` {valid}/{next_threshold}\n"
+                    f"**{needed} more** invite(s) needed for a **{next_key}**"
+                ),
+                inline=False,
+            )
+
+        embed.set_footer(text="Only you can see this • Dismiss message")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @discord.ui.button(
         label="🎫 Request Key",
         style=discord.ButtonStyle.secondary,
         custom_id="invite_request_key",
